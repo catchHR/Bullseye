@@ -1,0 +1,53 @@
+{
+  "name": "@catchhr/nestjs-bullseye",
+  "version": "0.1.1",
+  "description": "Embedded Bull queue dashboard (SPA + REST) for NestJS with Express",
+  "license": "MIT",
+  "author": "",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "nestjs",
+    "bull",
+    "queue",
+    "dashboard",
+    "redis"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "public"
+  ],
+  "scripts": {
+    "build": "npm run build:frontend && npm run build:lib",
+    "build:lib": "tsc -p tsconfig.build.json",
+    "build:frontend": "npm install --prefix frontend && npm run build --prefix frontend",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@nestjs/bull": "^11.0.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "bull": "^4.16.0",
+    "express": "^4.21.0 || ^5.0.0",
+    "ioredis": "^5.0.0"
+  },
+  "dependencies": {
+    "express-basic-auth": "^1.2.1"
+  },
+  "devDependencies": {
+    "@nestjs/bull": "^11.0.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "bull": "^4.16.0",
+    "ioredis": "^5.0.0",
+    "typescript": "~5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

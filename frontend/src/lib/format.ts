@@ -48,6 +48,25 @@ export function formatEveryMs(ms: number | null): string {
   return `${seconds % 1 === 0 ? seconds : seconds.toFixed(1)}s`;
 }
 
+export function formatBytesBinary(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) {
+    return '—';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'] as const;
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const label =
+    value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return `${label.replace(/\.0+$/, '')} ${units[unitIndex]}`;
+}
+
 /** Human-readable duration for tooltips (delay ms). */
 /** Short duration for tables (job runtime). */
 export function formatDurationCompact(ms: number | null | undefined): string {

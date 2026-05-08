@@ -32,6 +32,32 @@ export async function fetchQueues() {
   return response.json() as Promise<QueueSummary[]>;
 }
 
+export type RedisMetrics = {
+  ts: number;
+  redisVersion: string | null;
+  role: string | null;
+  uptimeSec: number | null;
+  dbKeys: number | null;
+  clients: { connected: number | null; blocked: number | null };
+  opsPerSec: number | null;
+  keyspace: { hits: number | null; misses: number | null; hitRate: number | null };
+  memory: {
+    usedBytes: number | null;
+    peakBytes: number | null;
+    rssBytes: number | null;
+    maxBytes: number | null;
+    fragmentationRatio: number | null;
+  };
+};
+
+export async function fetchRedisMetrics(): Promise<RedisMetrics> {
+  const response = await fetch(`${mountBasePath()}/api/redis/metrics`);
+  if (!response.ok) {
+    throw new Error('Redis metrics failed to load');
+  }
+  return response.json() as Promise<RedisMetrics>;
+}
+
 export interface RepeatableJob {
   queueName: string;
   key: string;

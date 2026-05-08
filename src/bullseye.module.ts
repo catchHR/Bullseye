@@ -19,6 +19,7 @@ export class BullseyeModule {
           provide: BULLSEYE_OPTIONS,
           useValue: {
             ...options,
+            backend: options.backend ?? 'bull',
             queueNames: options.queueNames ?? [],
             autoDiscoverQueues: options.autoDiscoverQueues ?? true,
           } satisfies BullseyeModuleOptions,
@@ -50,6 +51,7 @@ export class BullseyeModule {
             const resolved = await asyncOptions.useFactory(...arguments_);
             return {
               ...resolved,
+              backend: resolved.backend ?? 'bull',
               queueNames: resolved.queueNames ?? [],
               autoDiscoverQueues: resolved.autoDiscoverQueues ?? true,
             } satisfies BullseyeModuleOptions;

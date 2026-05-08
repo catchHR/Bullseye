@@ -59,32 +59,62 @@ export class BullseyeAlertListenerService
   }
 
   private async attachQueue(queueName: string) {
-    const queue = this.api.getQueueInstance(queueName);
-    await queue.isReady();
+    if (!this.api.isBullMqBackend()) {
+      const queue = this.api.getQueueInstance(queueName);
+      await queue.isReady();
 
-    queue.on('failed', (job: Bull.Job, error: Error) => {
-      void this.alerts.dispatchForTrigger('job_failed', queueName, () =>
-        this.buildJobContext('job_failed', queueName, job, error),
-      );
-    });
+      queue.on('failed', (job: Bull.Job, error: Error) => {
+        void this.alerts.dispatchForTrigger('job_failed', queueName, () =>
+          this.buildJobContext('job_failed', queueName, job, error),
+        );
+      });
 
-    queue.on('stalled', (job: Bull.Job) => {
-      void this.alerts.dispatchForTrigger('job_stalled', queueName, () =>
-        this.buildJobContext('job_stalled', queueName, job),
-      );
-    });
+      queue.on('stalled', (job: Bull.Job) => {
+        void this.alerts.dispatchForTrigger('job_stalled', queueName, () =>
+          this.buildJobContext('job_stalled', queueName, job),
+        );
+      });
 
-    queue.on('completed', (job: Bull.Job) => {
-      void this.alerts.dispatchForTrigger('job_completed', queueName, () =>
-        this.buildJobContext('job_completed', queueName, job),
-      );
-    });
+      queue.on('completed', (job: Bull.Job) => {
+        void this.alerts.dispatchForTrigger('job_completed', queueName, () =>
+          this.buildJobContext('job_completed', queueName, job),
+        );
+      });
 
-    queue.on('error', (error: Error) => {
-      void this.alerts.dispatchForTrigger('queue_error', queueName, () =>
-        this.buildQueueErrorContext(queueName, error),
-      );
-    });
+      queue.on('error', (error: Error) => {
+        void this.alerts.dispatchForTrigger('queue_error', queueName, () =>
+          this.buildQueueErrorContext(queueName, error),
+        );
+      });
+    } else {
+      await this.api.attachQueueEvents(queueName, ({ type, queueName, jobId, error }) => {
+        if (type === 'queue_error') {
+          void this.alerts.dispatchForTrigger('queue_error', queueName, () =>
+            this.buildQueueErrorContext(queueName, error ?? new Error('Queue error')),
+          );
+          return;
+        }
+        const trigger = type as AlertTriggerType;
+        void this.alerts.dispatchForTrigger(trigger, queueName, () => ({
+          trigger,
+          queueName,
+          job: jobId
+            ? {
+                id: String(jobId),
+                name: '',
+                data: null,
+                failedReason: '',
+                stacktrace: null,
+                attemptsMade: 0,
+                timestamp: 0,
+                processedOn: null,
+                finishedOn: null,
+              }
+            : null,
+          error: error ? { message: error.message, stack: error.stack } : null,
+        }));
+      });
+    }
 
     this.logger.log(`Alert listeners attached for queue "${queueName}".`);
   }

@@ -3,6 +3,7 @@ import { ModulesContainer } from '@nestjs/core';
 /** CJS-Queue-Konstruktor — `import Bull from 'bull'` wird zu `require(...).default` und ist zur Laufzeit undefined. */
 import Bull = require('bull');
 import IORedis, { type RedisOptions } from 'ioredis';
+import { BullMqDriver } from './drivers/bullmq.driver';
 
 /** Bull `Job.DEFAULT_JOB_NAME` when `name` is omitted in `queue.add`. */
 const BULL_DEFAULT_JOB_NAME = '__default__';
@@ -25,6 +26,8 @@ export class BullseyeApiService implements OnModuleDestroy {
   private readonly logger = new Logger(BullseyeApiService.name);
   private readonly scanRedis: IORedis;
   private readonly queueCache = new Map<string, Bull.Queue>();
+  private bullmqDriver: BullMqDriver | null = null;
+  private readonly attachedAlertQueues = new Set<string>();
 
   /** Matches `@nestjs/bull-shared` / `getQueueToken`: `BullQueue_<name>` */
   private static readonly BULL_QUEUE_TOKEN_PREFIX = 'BullQueue_';
@@ -51,12 +54,129 @@ export class BullseyeApiService implements OnModuleDestroy {
     return new IORedis(opts);
   }
 
+  async getRedisMetrics(): Promise<{
+    ts: number;
+    redisVersion: string | null;
+    role: string | null;
+    uptimeSec: number | null;
+    dbKeys: number | null;
+    clients: { connected: number | null; blocked: number | null };
+    opsPerSec: number | null;
+    keyspace: {
+      hits: number | null;
+      misses: number | null;
+      hitRate: number | null;
+    };
+    memory: {
+      usedBytes: number | null;
+      peakBytes: number | null;
+      rssBytes: number | null;
+      maxBytes: number | null;
+      fragmentationRatio: number | null;
+    };
+  }> {
+    const ts = Date.now();
+    const infoRaw = await this.scanRedis.info();
+    const info = this.parseRedisInfo(infoRaw);
+
+    const dbKeys = await this.scanRedis
+      .dbsize()
+      .then((n) => (typeof n === 'number' ? n : null))
+      .catch(() => null);
+
+    const hits = this.toNumberOrNull(info.keyspace_hits);
+    const misses = this.toNumberOrNull(info.keyspace_misses);
+    const hitRate =
+      hits != null && misses != null && hits + misses > 0
+        ? hits / (hits + misses)
+        : null;
+
+    return {
+      ts,
+      redisVersion: info.redis_version ?? null,
+      role: info.role ?? null,
+      uptimeSec: this.toNumberOrNull(info.uptime_in_seconds),
+      dbKeys,
+      clients: {
+        connected: this.toNumberOrNull(info.connected_clients),
+        blocked: this.toNumberOrNull(info.blocked_clients),
+      },
+      opsPerSec: this.toNumberOrNull(info.instantaneous_ops_per_sec),
+      keyspace: { hits, misses, hitRate },
+      memory: {
+        usedBytes: this.toNumberOrNull(info.used_memory),
+        peakBytes: this.toNumberOrNull(info.used_memory_peak),
+        rssBytes: this.toNumberOrNull(info.used_memory_rss),
+        maxBytes: this.toNumberOrNull(info.maxmemory),
+        fragmentationRatio: this.toNumberOrNull(info.mem_fragmentation_ratio),
+      },
+    };
+  }
+
+  private parseRedisInfo(infoRaw: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const line of infoRaw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+      const idx = trimmed.indexOf(':');
+      if (idx <= 0) {
+        continue;
+      }
+      const key = trimmed.slice(0, idx);
+      const value = trimmed.slice(idx + 1);
+      out[key] = value;
+    }
+    return out;
+  }
+
+  private toNumberOrNull(value: unknown): number | null {
+    if (value == null) {
+      return null;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
   onModuleDestroy() {
     for (const queue of this.queueCache.values()) {
       void queue.close();
     }
     this.queueCache.clear();
     void this.scanRedis.quit();
+    this.bullmqDriver?.onModuleDestroy();
+    this.bullmqDriver = null;
+  }
+
+  private usingBullMq(): boolean {
+    return this.options.backend === 'bullmq';
+  }
+
+  isBullMqBackend(): boolean {
+    return this.usingBullMq();
+  }
+
+  private getBullMqDriver(): BullMqDriver {
+    if (!this.bullmqDriver) {
+      this.bullmqDriver = new BullMqDriver(this.options);
+    }
+    return this.bullmqDriver;
+  }
+
+  async attachQueueEvents(
+    queueName: string,
+    handler: Parameters<BullMqDriver['attachQueueEvents']>[1],
+  ): Promise<void> {
+    if (!this.usingBullMq()) {
+      // For Bull (classic), the alert listener attaches directly to the Bull queue instance.
+      return;
+    }
+    if (this.attachedAlertQueues.has(queueName)) {
+      return;
+    }
+    await this.getBullMqDriver().attachQueueEvents(queueName, handler as any);
+    this.attachedAlertQueues.add(queueName);
   }
 
   /**
@@ -80,6 +200,9 @@ export class BullseyeApiService implements OnModuleDestroy {
   }
 
   async listQueueNames(): Promise<string[]> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().listQueueNames();
+    }
     const manual = [
       ...new Set((this.options.queueNames ?? []).filter(Boolean)),
     ].sort();
@@ -188,6 +311,9 @@ export class BullseyeApiService implements OnModuleDestroy {
   }
 
   async getRepeatableJobsAcrossQueues(): Promise<RepeatableJobDto[]> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getRepeatableJobsAcrossQueues();
+    }
     const names = await this.listQueueNames();
     const aggregated: RepeatableJobDto[] = [];
     for (const queueName of names) {
@@ -222,6 +348,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * For alert configuration: typical job names from repeatable definitions plus small samples.
    */
   async listDistinctJobNamesForQueues(queueNames: string[]): Promise<string[]> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().listDistinctJobNamesForQueues(queueNames);
+    }
     const names = new Set<string>();
     const knownQueues = new Set(await this.listQueueNames());
     for (const queueName of queueNames) {
@@ -253,6 +382,9 @@ export class BullseyeApiService implements OnModuleDestroy {
   }
 
   async getQueueSummaries(): Promise<QueueSummaryDto[]> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getQueueSummaries();
+    }
     const names = await this.listQueueNames();
     const results: QueueSummaryDto[] = [];
     for (const name of names) {
@@ -289,6 +421,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * @see https://github.com/OptimalBits/bull/blob/develop/REFERENCE.md#queuepause
    */
   async pauseQueue(queueName: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().pauseQueue(queueName);
+    }
     await this.requireKnownQueue(queueName);
     const queue = this.getQueue(queueName);
     await queue.isReady();
@@ -296,6 +431,9 @@ export class BullseyeApiService implements OnModuleDestroy {
   }
 
   async resumeQueue(queueName: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().resumeQueue(queueName);
+    }
     await this.requireKnownQueue(queueName);
     const queue = this.getQueue(queueName);
     await queue.isReady();
@@ -307,6 +445,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * Active, completed, failed, paused job rows, and repeatable configs stay.
    */
   async emptyQueue(queueName: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().emptyQueue(queueName);
+    }
     await this.requireKnownQueue(queueName);
     const queue = this.getQueue(queueName);
     await queue.isReady();
@@ -361,6 +502,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     start: number,
     end: number,
   ): Promise<JobListItemDto[]> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getJobs(queueName, status, start, end);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const types = this.bullTypesForStatus(status);
@@ -374,6 +518,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     queueName: string,
     jobId: string,
   ): Promise<JobListItemDto | null> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getJobById(queueName, jobId);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const job = await queue.getJob(jobId);
@@ -402,6 +549,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * Moves a delayed job to the waiting list (Bull `Job#promote`).
    */
   async promoteDelayedJob(queueName: string, jobId: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().promoteDelayedJob(queueName, jobId);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const job = await queue.getJob(jobId);
@@ -419,6 +569,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * Removes a job from Redis (`Job#remove`).
    */
   async removeJob(queueName: string, jobId: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().removeJob(queueName, jobId);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const job = await queue.getJob(jobId);
@@ -432,6 +585,9 @@ export class BullseyeApiService implements OnModuleDestroy {
    * Re-queues a failed job (`Job#retry`). Only jobs in `failed` state.
    */
   async retryFailedJob(queueName: string, jobId: string): Promise<void> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().retryFailedJob(queueName, jobId);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const job = await queue.getJob(jobId);
@@ -452,6 +608,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     queueName: string,
     payload: { name: string; data: unknown; opts?: unknown },
   ): Promise<{ id: string }> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().addJob(queueName, payload);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const name =
@@ -493,6 +652,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     sourceJobId: string,
     overrides: { name?: string; data?: unknown; opts?: unknown },
   ): Promise<{ id: string }> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().duplicateJob(queueName, sourceJobId, overrides);
+    }
     const queue = this.getQueue(queueName);
     await queue.isReady();
     const sourceJob = await queue.getJob(sourceJobId);
@@ -580,6 +742,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     limitRaw: unknown,
     statusParam: unknown,
   ): Promise<CrossQueueJobLogDto> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getCrossQueueJobLog(offsetRaw, limitRaw, statusParam);
+    }
     const offset = Math.max(0, parseInt(String(offsetRaw), 10) || 0);
     const limit = Math.min(Math.max(parseInt(String(limitRaw), 10) || 50, 1), 100);
 
@@ -716,6 +881,9 @@ export class BullseyeApiService implements OnModuleDestroy {
     /** When set, only include jobs with `finishedOn >= minFinishedOn` (unix ms). */
     minFinishedOnMs?: number,
   ): Promise<JobRuntimeStatsDto> {
+    if (this.usingBullMq()) {
+      return this.getBullMqDriver().getJobRuntimeStats(perQueueRaw, minFinishedOnMs);
+    }
     const perQueue = Math.min(Math.max(Math.floor(perQueueRaw) || 100, 20), 400);
     const minFinishedOn =
       minFinishedOnMs != null &&

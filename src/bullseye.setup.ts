@@ -9,7 +9,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 /** CJS export has no `default` — default import breaks at runtime (Express 5 + `express_1.default`). */
 import * as express from 'express';
 import expressBasicAuth from 'express-basic-auth';
-import { join } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 import { BullseyeAlertService } from './bullseye.alert.service';
 import { BullseyeApiService } from './bullseye.api.service';
 import {
@@ -40,6 +40,24 @@ export class BullseyeSetupService implements OnModuleInit {
     const router = express.Router();
     router.use(express.json({ limit: '512kb' }));
 
+    // Optional custom favicon (served under the mount path).
+    const faviconPathRaw = this.options.faviconPath?.trim();
+    if (faviconPathRaw) {
+      const faviconPath = isAbsolute(faviconPathRaw)
+        ? faviconPathRaw
+        : resolve(process.cwd(), faviconPathRaw);
+      router.get('/favicon.ico', (_req: Request, res: Response) => {
+        res.sendFile(faviconPath, (error) => {
+          if (error) {
+            this.logger.warn(
+              `Failed to serve favicon from "${faviconPath}": ${error.message}`,
+            );
+            res.status(404).end();
+          }
+        });
+      });
+    }
+
     router.get('/api/ui-config', (_req: Request, res: Response) => {
       const configured = this.options.operator;
       const displayName =
@@ -67,6 +85,16 @@ export class BullseyeSetupService implements OnModuleInit {
       } catch (error) {
         this.logger.error(error);
         res.status(500).json({ message: 'Failed to load queues.' });
+      }
+    });
+
+    router.get('/api/redis/metrics', async (_req: Request, res: Response) => {
+      try {
+        const metrics = await this.api.getRedisMetrics();
+        res.json(metrics);
+      } catch (error) {
+        this.logger.error(error);
+        res.status(500).json({ message: 'Failed to load Redis metrics.' });
       }
     });
 
@@ -290,6 +318,12 @@ export class BullseyeSetupService implements OnModuleInit {
           const message = error instanceof Error ? error.message : String(error);
           if (message === 'JOB_NOT_FOUND') {
             res.status(404).json({ message: 'Job not found.' });
+            return;
+          }
+          if (message === 'JOB_PROMOTE_UNSUPPORTED') {
+            res
+              .status(400)
+              .json({ message: 'Promote is not supported by this queue backend.' });
             return;
           }
           if (message.startsWith('JOB_NOT_DELAYED:')) {

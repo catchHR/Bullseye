@@ -5,7 +5,7 @@
 
 Embedded **web dashboard for [Bull](https://github.com/OptimalBits/bull)** (classic Bull queues) in a **NestJS** app with **Express**. Includes queue/job overviews, repeatable jobs, cross-queue logs, runtime statistics, and optional **webhook alerts**. The UI ships as **static assets** — no separate “Bull Board” service required.
 
-> Target: **Bull (bull + @nestjs/bull)**. This package is **not** for BullMQ.
+> Targets: **Bull (bull + @nestjs/bull)** and **BullMQ (bullmq)**.
 
 ---
 
@@ -35,6 +35,11 @@ This repository includes a `.npmrc` with `omit=peer` so `npm install` does **not
 
 Import `BullseyeModule` **after** you configure Bull (`BullModule.forRoot` / `registerQueue`). Use the **same Redis settings and the same `prefix`** as your workers.
 
+### Backend selection (Bull vs BullMQ)
+
+- Default: `backend: 'bull'`
+- BullMQ: set `backend: 'bullmq'` (queues can be discovered via Redis key scanning, or configured explicitly via `queueNames`).
+
 ```typescript
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bull';
@@ -51,6 +56,8 @@ import { BullseyeModule } from '@catchhr/nestjs-bullseye';
       basePath: '/queue-dashboard',
       redis: { host: 'localhost', port: 6379 },
       prefix: 'myapp',
+      backend: 'bull', // or: 'bullmq'
+      queueNames: ['email'], // optional allow-list (recommended in locked-down environments)
     }),
   ],
 })
@@ -79,7 +86,9 @@ BullseyeModule.forRootAsync({
 
 | Option | Type | Description |
 |--------|------|-------------|
+| `backend` | `'bull' \| 'bullmq'` | Queue backend implementation (default: `bull`). |
 | `basePath` | `string` | Mount path **without** a trailing slash (SPA + `/api/*`). |
+| `faviconPath` | `string?` | Optional favicon file to serve as `${basePath}/favicon.ico` (absolute or relative to `process.cwd()`). |
 | `redis` | same shape as `BullModule.forRoot` | Must match your workers. |
 | `prefix` | `string?` | Bull key prefix (same as in `BullModule.forRoot`). |
 | `queueNames` | `string[]?` | Fixed allow-list; if omitted, queues can be discovered automatically (see below). |
@@ -91,7 +100,7 @@ BullseyeModule.forRootAsync({
 
 Exported token: **`BULLSEYE_OPTIONS`**.
 
-Queues are detected from `BullModule.registerQueue` providers (`BullQueue_<name>`) and/or via Redis key scanning (`{prefix}:*:meta`).
+Queues can be detected via Nest DI (Bull classic) and/or via Redis key scanning (`{prefix}:*:meta`).
 
 ---
 

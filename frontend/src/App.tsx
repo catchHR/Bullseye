@@ -87,6 +87,7 @@ import {
   fetchJobs,
   fetchQueues,
   fetchRepeatableJobs,
+  fetchRedisMetrics,
   fetchUiConfig,
   promoteJob,
   removeQueueJob,
@@ -97,12 +98,14 @@ import {
   type JobRuntimeStats,
   type JobStatus,
   type QueueSummary,
+  type RedisMetrics,
   type RepeatableJob,
 } from '@/lib/api';
 import { stripEnqueueMetaFromOpts } from '@/lib/bull-job-opts';
 import { filterJobs } from '@/lib/job-filter';
 import {
   formatCronNaturalLanguage,
+  formatBytesBinary,
   formatDurationCompact,
   formatEveryMs,
   formatEveryNaturalLanguage,
@@ -352,6 +355,28 @@ function sumTotals(queues: QueueSummary[]) {
   return totals;
 }
 
+function RedisStat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/15 px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-1 font-mono text-sm font-semibold tabular-nums">{value}</p>
+      {hint ? (
+        <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
+  );
+}
+
 const NAV_ITEMS: { id: NavView; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'queues', label: 'Queues', icon: ListTree },
@@ -592,6 +617,7 @@ export default function App() {
   const [nav, setNav] = useState<NavView>(() => urlSnap?.nav ?? 'overview');
   const [queues, setQueues] = useState<QueueSummary[]>([]);
   const [repeatableJobs, setRepeatableJobs] = useState<RepeatableJob[]>([]);
+  const [redisMetrics, setRedisMetrics] = useState<RedisMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedQueue, setSelectedQueue] = useState<string | null>(() => urlSnap?.queue ?? null);
@@ -983,6 +1009,24 @@ export default function App() {
     }
   }, []);
 
+  const loadRedisMetrics = useCallback(async (fromPoll = false) => {
+    try {
+      const data = await fetchRedisMetrics();
+      setRedisMetrics(data);
+      if (!fromPoll) {
+        setError(null);
+      }
+    } catch (errorUnknown) {
+      if (!fromPoll) {
+        setError(
+          errorUnknown instanceof Error
+            ? errorUnknown.message
+            : 'Redis metrics failed to load',
+        );
+      }
+    }
+  }, []);
+
   const loadRuntimeStats = useCallback(async () => {
     try {
       setRuntimeStatsLoading(true);
@@ -1019,7 +1063,7 @@ export default function App() {
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadQueues(), loadRepeatable()]);
+      await Promise.all([loadQueues(), loadRepeatable(), loadRedisMetrics()]);
       if (nav === 'overview' && overviewDashboardTab === 'performance') {
         await loadRuntimeStats();
       }
@@ -1035,6 +1079,7 @@ export default function App() {
   }, [
     loadQueues,
     loadRepeatable,
+    loadRedisMetrics,
     loadRuntimeStats,
     loadJobLog,
     nav,
@@ -1044,15 +1089,17 @@ export default function App() {
   useEffect(() => {
     void loadQueues();
     void loadRepeatable();
+    void loadRedisMetrics(true);
     if (pollIntervalMs <= 0) {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
       void loadQueues();
       void loadRepeatable();
+      void loadRedisMetrics(true);
     }, pollIntervalMs);
     return () => window.clearInterval(intervalId);
-  }, [loadQueues, loadRepeatable, pollIntervalMs]);
+  }, [loadQueues, loadRepeatable, loadRedisMetrics, pollIntervalMs]);
 
   useEffect(() => {
     void fetchUiConfig()
@@ -1649,6 +1696,113 @@ export default function App() {
                   </CardContent>
                 </Card>
               </div>
+
+              <Card className="shadow-none">
+                <CardHeader className="pb-2 pt-4">
+                  <CardTitle className="text-sm">Redis</CardTitle>
+                  <CardDescription className="text-xs">
+                    Live metrics via polling (INFO/DBSIZE)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pb-4">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <RedisStat
+                      label="Used memory"
+                      value={formatBytesBinary(redisMetrics?.memory.usedBytes)}
+                      hint={
+                        redisMetrics?.memory.maxBytes &&
+                        redisMetrics.memory.maxBytes > 0 &&
+                        redisMetrics.memory.usedBytes != null
+                          ? `${Math.round(
+                              (redisMetrics.memory.usedBytes /
+                                redisMetrics.memory.maxBytes) *
+                                100,
+                            )}% of max`
+                          : undefined
+                      }
+                    />
+                    <RedisStat
+                      label="Peak memory"
+                      value={formatBytesBinary(redisMetrics?.memory.peakBytes)}
+                      hint={
+                        redisMetrics?.memory.fragmentationRatio != null
+                          ? `Frag ${redisMetrics.memory.fragmentationRatio.toFixed(2)}`
+                          : undefined
+                      }
+                    />
+                    <RedisStat
+                      label="Connected clients"
+                      value={
+                        redisMetrics?.clients.connected != null
+                          ? redisMetrics.clients.connected.toLocaleString('en-US')
+                          : '—'
+                      }
+                      hint={
+                        redisMetrics?.clients.blocked != null
+                          ? `${redisMetrics.clients.blocked.toLocaleString('en-US')} blocked`
+                          : undefined
+                      }
+                    />
+                    <RedisStat
+                      label="Ops/sec"
+                      value={
+                        redisMetrics?.opsPerSec != null
+                          ? Math.round(redisMetrics.opsPerSec).toLocaleString(
+                              'en-US',
+                            )
+                          : '—'
+                      }
+                    />
+                    <RedisStat
+                      label="Keyspace hit rate"
+                      value={
+                        redisMetrics?.keyspace.hitRate != null
+                          ? `${Math.round(
+                              redisMetrics.keyspace.hitRate * 100,
+                            )}%`
+                          : '—'
+                      }
+                      hint={
+                        redisMetrics?.keyspace.hits != null &&
+                        redisMetrics?.keyspace.misses != null
+                          ? `${redisMetrics.keyspace.hits.toLocaleString(
+                              'en-US',
+                            )} hits · ${redisMetrics.keyspace.misses.toLocaleString(
+                              'en-US',
+                            )} misses`
+                          : undefined
+                      }
+                    />
+                    <RedisStat
+                      label="DB keys"
+                      value={
+                        redisMetrics?.dbKeys != null
+                          ? redisMetrics.dbKeys.toLocaleString('en-US')
+                          : '—'
+                      }
+                    />
+                    <RedisStat
+                      label="Uptime"
+                      value={
+                        redisMetrics?.uptimeSec != null
+                          ? formatDurationCompact(
+                              redisMetrics.uptimeSec * 1000,
+                            )
+                          : '—'
+                      }
+                    />
+                    <RedisStat
+                      label="Role"
+                      value={redisMetrics?.role ?? '—'}
+                      hint={
+                        redisMetrics?.redisVersion
+                          ? `Redis ${redisMetrics.redisVersion}`
+                          : undefined
+                      }
+                    />
+                  </div>
+                </CardContent>
+              </Card>
 
               <Card className="shadow-none">
                 <CardHeader className="flex flex-row items-center gap-2 pb-2 pt-4">

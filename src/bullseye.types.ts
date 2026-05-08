@@ -18,9 +18,18 @@ export interface BullseyeOperatorProfile {
 }
 
 export interface BullseyeModuleOptions {
+  /** Queue backend implementation (default: `bull`). */
+  backend?: 'bull' | 'bullmq';
   /** Mount path without trailing slash (e.g. `/queue-dashboard`) */
   basePath: string;
-  /** Same Redis / Sentinel as worker queues (`BullModule.forRoot`) */
+  /**
+   * Optional favicon file path to serve as `${basePath}/favicon.ico`.
+   * Useful when embedding Bullseye into different apps/environments.
+   *
+   * Can be absolute or relative to `process.cwd()`.
+   */
+  faviconPath?: string;
+  /** Same Redis / Sentinel as worker queues (`BullModule.forRoot` / BullMQ connection) */
   redis: BullRootModuleOptions['redis'];
   /** Redis key prefix — same as `prefix` in `BullModule.forRoot` */
   prefix?: string;

@@ -4,6 +4,10 @@
   "description": "Embedded Bull queue dashboard (SPA + REST) for NestJS with Express",
   "license": "MIT",
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/catch-talents/bullseye.git"
+  },
   "publishConfig": {
     "access": "public"
   },

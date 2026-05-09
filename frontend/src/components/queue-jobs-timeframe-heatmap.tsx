@@ -7,6 +7,13 @@ import { ParentSize } from '@visx/responsive';
 import { scaleLinear, scaleTime } from '@visx/scale';
 import { Button } from '@/components/ui/button';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -16,9 +23,10 @@ import { formatDurationCompact, formatTimestampPretty } from '@/lib/format';
 import { JOB_STATE_HEATMAP_FILL } from '@/lib/status-styles';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const TIMEFRAME_EXPANDED_KEY = 'bullseye-queue-jobs-timeframe-expanded';
+const TIMEFRAME_PRESET_STORAGE_KEY = 'bullseye-queue-jobs-timeframe-preset';
 
 function readTimeframeExpanded(): boolean {
   if (typeof window === 'undefined') {
@@ -27,8 +35,215 @@ function readTimeframeExpanded(): boolean {
   return window.localStorage.getItem(TIMEFRAME_EXPANDED_KEY) !== '0';
 }
 
+export type TimeframePresetId =
+  | 'all_time'
+  | 'last_5m'
+  | 'last_10m'
+  | 'last_15m'
+  | 'last_30m'
+  | 'last_1h'
+  | 'last_3h'
+  | 'last_6h'
+  | 'last_12h'
+  | 'last_24h'
+  | 'last_2d'
+  | 'last_7d'
+  | 'yesterday'
+  | 'day_before_yesterday'
+  | 'today'
+  | 'today_so_far'
+  | 'this_week'
+  | 'this_week_so_far';
+
+const TIMEFRAME_PRESETS: { id: TimeframePresetId; label: string }[] = [
+  { id: 'all_time', label: 'All time' },
+  { id: 'last_5m', label: 'Last 5 minutes' },
+  { id: 'last_10m', label: 'Last 10 minutes' },
+  { id: 'last_15m', label: 'Last 15 minutes' },
+  { id: 'last_30m', label: 'Last 30 minutes' },
+  { id: 'last_1h', label: 'Last 1 hour' },
+  { id: 'last_3h', label: 'Last 3 hours' },
+  { id: 'last_6h', label: 'Last 6 hours' },
+  { id: 'last_12h', label: 'Last 12 hours' },
+  { id: 'last_24h', label: 'Last 24 hours' },
+  { id: 'last_2d', label: 'Last 2 days' },
+  { id: 'last_7d', label: 'Last 7 days' },
+  { id: 'yesterday', label: 'Yesterday' },
+  { id: 'day_before_yesterday', label: 'Day before yesterday' },
+  { id: 'today', label: 'Today' },
+  { id: 'today_so_far', label: 'Today so far' },
+  { id: 'this_week', label: 'This week' },
+  { id: 'this_week_so_far', label: 'This week so far' },
+];
+
+const PRESET_IDS = new Set(TIMEFRAME_PRESETS.map((p) => p.id));
+
+function readStoredTimeframePreset(): TimeframePresetId {
+  if (typeof window === 'undefined') {
+    return 'all_time';
+  }
+  const raw = window.localStorage.getItem(TIMEFRAME_PRESET_STORAGE_KEY);
+  if (raw && PRESET_IDS.has(raw as TimeframePresetId)) {
+    return raw as TimeframePresetId;
+  }
+  return 'all_time';
+}
+
+function startOfLocalDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfLocalDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+/** Monday 00:00 local (week containing `now`). */
+function startOfLocalWeekMonday(nowMs: number): number {
+  const now = new Date(nowMs);
+  const dow = now.getDay();
+  const offset = dow === 0 ? -6 : 1 - dow;
+  const mon = new Date(now);
+  mon.setDate(now.getDate() + offset);
+  return startOfLocalDay(mon).getTime();
+}
+
+/** Sunday 23:59:59.999 local for the week that starts on Monday `weekStartMs`. */
+function endOfLocalWeekFromMondayStart(weekStartMs: number): number {
+  const sun = new Date(weekStartMs);
+  sun.setDate(sun.getDate() + 6);
+  return endOfLocalDay(sun).getTime();
+}
+
+/** X-axis span from the jobs currently loaded into the heatmap (no fixed clock window). */
+function computeDataDrivenTimeRange(
+  jobs: JobRow[],
+  jobStatus: JobsQueryStatus,
+  nowMs: number,
+): { start: number; end: number } {
+  let minT = Number.POSITIVE_INFINITY;
+  let maxT = Number.NEGATIVE_INFINITY;
+  for (const job of jobs) {
+    const c = jobToHeatmapCoords(job, jobStatus, nowMs);
+    if (!c) {
+      continue;
+    }
+    minT = Math.min(minT, c.tMs);
+    maxT = Math.max(maxT, c.tMs);
+  }
+  if (!Number.isFinite(minT) || !Number.isFinite(maxT)) {
+    return { start: nowMs - 3600_000, end: nowMs };
+  }
+  if (maxT - minT < 60_000) {
+    const mid = (minT + maxT) / 2;
+    return { start: mid - 30_000, end: mid + 30_000 };
+  }
+  return { start: minT, end: maxT };
+}
+
+type FixedTimeframePresetId = Exclude<TimeframePresetId, 'all_time'>;
+
+function getFixedPresetTimeRange(preset: FixedTimeframePresetId, nowMs: number): {
+  start: number;
+  end: number;
+} {
+  const now = new Date(nowMs);
+  switch (preset) {
+    case 'last_5m':
+      return { start: nowMs - 5 * 60_000, end: nowMs };
+    case 'last_10m':
+      return { start: nowMs - 10 * 60_000, end: nowMs };
+    case 'last_15m':
+      return { start: nowMs - 15 * 60_000, end: nowMs };
+    case 'last_30m':
+      return { start: nowMs - 30 * 60_000, end: nowMs };
+    case 'last_1h':
+      return { start: nowMs - 3600_000, end: nowMs };
+    case 'last_3h':
+      return { start: nowMs - 3 * 3600_000, end: nowMs };
+    case 'last_6h':
+      return { start: nowMs - 6 * 3600_000, end: nowMs };
+    case 'last_12h':
+      return { start: nowMs - 12 * 3600_000, end: nowMs };
+    case 'last_24h':
+      return { start: nowMs - 24 * 3600_000, end: nowMs };
+    case 'last_2d':
+      return { start: nowMs - 2 * 86400_000, end: nowMs };
+    case 'last_7d':
+      return { start: nowMs - 7 * 86400_000, end: nowMs };
+    case 'yesterday': {
+      const y = new Date(nowMs);
+      y.setDate(y.getDate() - 1);
+      return { start: startOfLocalDay(y).getTime(), end: endOfLocalDay(y).getTime() };
+    }
+    case 'day_before_yesterday': {
+      const y = new Date(nowMs);
+      y.setDate(y.getDate() - 2);
+      return { start: startOfLocalDay(y).getTime(), end: endOfLocalDay(y).getTime() };
+    }
+    case 'today':
+      return { start: startOfLocalDay(now).getTime(), end: endOfLocalDay(now).getTime() };
+    case 'today_so_far':
+      return { start: startOfLocalDay(now).getTime(), end: nowMs };
+    case 'this_week': {
+      const start = startOfLocalWeekMonday(nowMs);
+      return { start, end: endOfLocalWeekFromMondayStart(start) };
+    }
+    case 'this_week_so_far':
+      return { start: startOfLocalWeekMonday(nowMs), end: nowMs };
+  }
+}
+
+/** X-axis tick label from window length (local time). */
+function formatHeatmapXTick(
+  value: Date,
+  rangeMs: number,
+  domainStartMs: number,
+  domainEndMs: number,
+): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const h = pad(value.getHours());
+  const m = pad(value.getMinutes());
+  if (rangeMs <= 6 * 3600_000) {
+    const sameDay =
+      new Date(domainStartMs).toDateString() === new Date(domainEndMs).toDateString();
+    if (sameDay) {
+      return `${h}:${m}`;
+    }
+    return `${value.getMonth() + 1}/${value.getDate()} ${h}:${m}`;
+  }
+  if (rangeMs <= 48 * 3600_000) {
+    return `${value.getMonth() + 1}/${value.getDate()} ${h}:${m}`;
+  }
+  if (rangeMs <= 14 * 86400_000) {
+    return value.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+  const y = value.getFullYear();
+  const thisY = new Date().getFullYear();
+  return value.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(y !== thisY ? { year: 'numeric' as const } : {}),
+  });
+}
+
+function xAxisNumTicks(rangeMs: number, innerWidth: number): number {
+  const w = Math.max(120, innerWidth);
+  const base =
+    rangeMs <= 3600_000 ? 5 : rangeMs <= 6 * 3600_000 ? 6 : rangeMs <= 48 * 3600_000 ? 7 : rangeMs <= 7 * 86400_000 ? 7 : 8;
+  return Math.min(base, Math.max(4, Math.floor(w / 72)));
+}
+
 const BLOCK = 5;
-const MARGIN = { top: 8, left: 56, right: 10, bottom: 36 };
+const MARGIN = { top: 8, left: 56, right: 10, bottom: 42 };
 
 export type TimeframeBrush = {
   tMin: number;
@@ -142,6 +357,7 @@ type HeatmapInnerProps = {
   jobs: JobRow[];
   jobStatus: JobsQueryStatus;
   nowMs: number;
+  timeRange: { start: number; end: number };
   onBrushDomain: (brush: TimeframeBrush | null) => void;
 };
 
@@ -151,8 +367,11 @@ function QueueJobsTimeframeHeatmapInner({
   jobs,
   jobStatus,
   nowMs,
+  timeRange,
   onBrushDomain,
 }: HeatmapInnerProps) {
+  const rangeMs = Math.max(1, timeRange.end - timeRange.start);
+
   const points = useMemo(() => {
     const list: {
       job: JobRow;
@@ -165,57 +384,51 @@ function QueueJobsTimeframeHeatmapInner({
       if (!c) {
         continue;
       }
+      if (c.tMs < timeRange.start || c.tMs > timeRange.end) {
+        continue;
+      }
       list.push({ job, ...c });
     }
     return list;
-  }, [jobs, jobStatus, nowMs]);
+  }, [jobs, jobStatus, nowMs, timeRange.start, timeRange.end]);
 
   const innerWidth = Math.max(0, width - MARGIN.left - MARGIN.right);
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
 
-  const { xScale, yScale, p99, maxD, maxT, minT } = useMemo(() => {
-    if (points.length === 0 || innerWidth <= 0 || innerHeight <= 0) {
-      const now = nowMs;
+  const { xScale, yScale, p99, maxD } = useMemo(() => {
+    const t0 = timeRange.start;
+    const t1 = timeRange.end;
+
+    if (innerWidth <= 0 || innerHeight <= 0) {
       const x = scaleTime({
-        domain: [new Date(now - 3600_000), new Date(now)],
+        domain: [new Date(t0), new Date(t1)],
         range: [0, Math.max(1, innerWidth)],
       });
       const y = scaleLinear({
         domain: [0, 1],
         range: [Math.max(1, innerHeight), 0],
       });
-      return {
-        xScale: x,
-        yScale: y,
-        p99: 0,
-        maxD: 0,
-        maxT: now,
-        minT: now - 3600_000,
-      };
+      return { xScale: x, yScale: y, p99: 0, maxD: 0 };
     }
 
-    let minTime = points[0].tMs;
-    let maxTime = points[0].tMs;
-    const durs: number[] = [];
-    for (const p of points) {
-      minTime = Math.min(minTime, p.tMs);
-      maxTime = Math.max(maxTime, p.tMs);
-      durs.push(p.durationMs);
+    const x = scaleTime({
+      domain: [new Date(t0), new Date(t1)],
+      range: [0, innerWidth],
+    });
+
+    if (points.length === 0) {
+      const y = scaleLinear({
+        domain: [0, 1],
+        range: [innerHeight, 0],
+      });
+      return { xScale: x, yScale: y, p99: 0, maxD: 0 };
     }
+
+    const durs = points.map((p) => p.durationMs);
     durs.sort((a, b) => a - b);
     const p99v = percentile(durs, 0.99);
     const maxDv = Math.max(1, durs[durs.length - 1] ?? 1, p99v * 1.02);
 
-    if (maxTime - minTime < 60_000) {
-      const mid = (minTime + maxTime) / 2;
-      minTime = mid - 30_000;
-      maxTime = mid + 30_000;
-    }
-
-    const x = scaleTime({
-      domain: [new Date(minTime), new Date(maxTime)],
-      range: [0, innerWidth],
-    });
     const y = scaleLinear({
       domain: [0, maxDv],
       range: [innerHeight, 0],
@@ -226,10 +439,13 @@ function QueueJobsTimeframeHeatmapInner({
       yScale: y,
       p99: p99v,
       maxD: maxDv,
-      maxT: maxTime,
-      minT: minTime,
     };
-  }, [points, innerWidth, innerHeight, nowMs]);
+  }, [points, innerWidth, innerHeight, timeRange.start, timeRange.end]);
+
+  const bottomNumTicks = useMemo(
+    () => xAxisNumTicks(rangeMs, innerWidth),
+    [rangeMs, innerWidth],
+  );
 
   const handleBrushEnd = useCallback(
     (bounds: Bounds | null) => {
@@ -349,14 +565,14 @@ function QueueJobsTimeframeHeatmapInner({
         top={innerHeight + MARGIN.top}
         left={MARGIN.left}
         scale={xScale}
-        tickFormat={(v) => {
-          const d = v as Date;
-          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        }}
+        numTicks={bottomNumTicks}
+        tickFormat={(v) =>
+          formatHeatmapXTick(v as Date, rangeMs, timeRange.start, timeRange.end)
+        }
         tickStroke="currentColor"
         tickLabelProps={{
           fill: 'currentColor',
-          fontSize: 9,
+          fontSize: rangeMs > 14 * 86400_000 ? 8 : 9,
           textAnchor: 'middle',
         }}
       />
@@ -389,6 +605,15 @@ export function QueueJobsTimeframeHeatmap({
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [sectionExpanded, setSectionExpanded] = useState(readTimeframeExpanded);
+  const [preset, setPreset] = useState<TimeframePresetId>(() => readStoredTimeframePreset());
+  const presetFirstRunRef = useRef(true);
+
+  const timeRange = useMemo(() => {
+    if (preset === 'all_time') {
+      return computeDataDrivenTimeRange(jobs, jobStatus, nowMs);
+    }
+    return getFixedPresetTimeRange(preset, nowMs);
+  }, [preset, nowMs, jobs, jobStatus]);
 
   useEffect(() => {
     if (jobStatus !== 'active' && jobStatus !== 'all') {
@@ -401,6 +626,19 @@ export function QueueJobsTimeframeHeatmap({
   useEffect(() => {
     setNowMs(Date.now());
   }, [jobs, jobStatus]);
+
+  useEffect(() => {
+    if (presetFirstRunRef.current) {
+      presetFirstRunRef.current = false;
+      return;
+    }
+    onClearBrush();
+  }, [preset, onClearBrush]);
+
+  const setPresetPersist = useCallback((next: TimeframePresetId) => {
+    setPreset(next);
+    window.localStorage.setItem(TIMEFRAME_PRESET_STORAGE_KEY, next);
+  }, []);
 
   const toggleExpanded = useCallback(() => {
     setSectionExpanded((previous) => {
@@ -432,24 +670,27 @@ export function QueueJobsTimeframeHeatmap({
           <div className="min-w-0">
             <p className="text-[11px] font-medium text-foreground">Time · duration</p>
             <p className="text-[10px] text-muted-foreground">
-              Drag a rectangle on the chart, release to filter the table by time and duration (
-              <a
-                href="https://visx.airbnb.tech/"
-                target="_blank"
-                rel="noreferrer"
-                className="underline decoration-muted-foreground/60 underline-offset-2 hover:text-foreground"
-                onClick={(event) => event.stopPropagation()}
-              >
-                visx
-              </a>
-              ).
-              {jobStatus === 'all'
-                ? ' Colors match job state (same as the status tags).'
-                : null}
+              The menu sets the chart’s time span (local time). Drag on the chart to filter the table
+              by time and duration.
             </p>
           </div>
         </button>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <Select value={preset} onValueChange={(v) => setPresetPersist(v as TimeframePresetId)}>
+            <SelectTrigger
+              aria-label="Chart time span"
+              className="h-8 w-[min(17.5rem,calc(100vw-8rem))] max-w-full text-[10px] sm:w-72"
+            >
+              <SelectValue placeholder="Time window" />
+            </SelectTrigger>
+            <SelectContent position="popper" className="z-[90] max-h-[min(24rem,70vh)]">
+              {TIMEFRAME_PRESETS.map((row) => (
+                <SelectItem key={row.id} value={row.id} className="text-xs">
+                  {row.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {brush ? (
             <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[10px] text-foreground">
               Filter on
@@ -484,12 +725,13 @@ export function QueueJobsTimeframeHeatmap({
             <ParentSize debounceTime={32}>
               {({ width, height }) => (
                 <QueueJobsTimeframeHeatmapInner
-                  key={resetKey}
+                  key={`${resetKey}-${preset}`}
                   width={width}
                   height={height}
                   jobs={jobs}
                   jobStatus={jobStatus}
                   nowMs={nowMs}
+                  timeRange={timeRange}
                   onBrushDomain={onBrushChange}
                 />
               )}

@@ -25,6 +25,7 @@ import {
   updateAlert,
   type QueueSummary,
 } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Bell, ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/bullseye-toast';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
@@ -111,21 +112,22 @@ function AlertTriggerEditor({
   ];
   const showJobNames = jobTriggerTypes.includes(trigger.type);
 
-  const triggerFilterLabelClass =
-    'text-[10px] font-medium uppercase tracking-wide text-muted-foreground';
+  /** Match {@link MultiSelect} label line so controls align across columns */
+  const filterFieldLabelClass =
+    'mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground';
 
   return (
     <div className="space-y-3">
       <div className="grid gap-3 md:grid-cols-12 md:items-start">
-        <div className="space-y-1 md:col-span-3">
-          <Label className={triggerFilterLabelClass}>Trigger</Label>
+        <div className="min-w-0 md:col-span-3">
+          <p className={filterFieldLabelClass}>Trigger</p>
           <Select
             value={trigger.type}
             onValueChange={(nextType) =>
               onChange({ ...trigger, type: nextType as AlertTriggerType })
             }
           >
-            <SelectTrigger className="h-9 w-full text-xs">
+            <SelectTrigger className="h-9 min-h-9 w-full px-2.5 py-1.5 text-xs font-normal">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -156,18 +158,19 @@ function AlertTriggerEditor({
               placeholder="All jobs"
             />
           ) : (
-            <div className="space-y-1">
-              <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Job names
-              </span>
-              <div className="flex min-h-[36px] items-center rounded-md border border-dashed border-muted px-2 text-xs text-muted-foreground">
+            <>
+              <p className={filterFieldLabelClass}>Job names</p>
+              <div className="flex min-h-9 items-center rounded-md border border-dashed border-muted px-2.5 py-1.5 text-xs text-muted-foreground">
                 Job-trigger types only
               </div>
-            </div>
+            </>
           )}
         </div>
-        <div className="flex md:col-span-1 md:justify-end md:pt-5">
-          {mayRemove ? (
+        {mayRemove ? (
+          <div className="flex min-w-0 flex-col items-end md:col-span-1">
+            <p className={cn(filterFieldLabelClass, 'w-full')} aria-hidden>
+              <span className="select-none text-transparent">Trigger</span>
+            </p>
             <Button
               type="button"
               variant="ghost"
@@ -178,8 +181,10 @@ function AlertTriggerEditor({
             >
               <Trash2 className="h-4 w-4" />
             </Button>
-          ) : null}
-        </div>
+          </div>
+        ) : (
+          <div className="hidden md:col-span-1 md:block" aria-hidden />
+        )}
       </div>
       <div className="space-y-1">
         <Label className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

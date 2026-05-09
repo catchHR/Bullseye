@@ -17,6 +17,7 @@ import {
   JobRuntimeStatsDto,
   JobStatusFilter,
   QueueSummaryDto,
+  SingleQueueJobStatus,
   RepeatableJobDto,
   SlowestRunDto,
 } from './bullseye.types';
@@ -479,13 +480,13 @@ export class BullseyeApiService implements OnModuleDestroy {
     };
   }
 
-  private jobListAscending(status: JobStatusFilter): boolean {
+  private jobListAscending(status: SingleQueueJobStatus): boolean {
     return status !== 'completed' && status !== 'failed';
   }
 
   /** Bull-Typen erwarten `JobStatus[]`; Runtime akzeptiert dieselben Status-Strings wie in den `.d.ts`. */
-  private bullTypesForStatus(status: JobStatusFilter): Bull.JobStatus[] {
-    const map: Record<JobStatusFilter, Bull.JobStatus[]> = {
+  private bullTypesForStatus(status: SingleQueueJobStatus): Bull.JobStatus[] {
+    const map: Record<SingleQueueJobStatus, Bull.JobStatus[]> = {
       waiting: ['waiting'],
       paused: ['paused'],
       active: ['active'],
@@ -496,9 +497,108 @@ export class BullseyeApiService implements OnModuleDestroy {
     return map[status];
   }
 
+  private jobListSortKey(job: JobListItemDto): number {
+    return job.finishedOn ?? job.processedOn ?? job.timestamp ?? 0;
+  }
+
+  /**
+   * Newest jobs across all Bull states for one queue (each row has `state`).
+   */
+  async getJobsMergedAllStatuses(
+    queueName: string,
+    start: number,
+    end: number,
+  ): Promise<JobListItemDto[]> {
+    await this.requireKnownQueue(queueName);
+    const statuses: SingleQueueJobStatus[] = [
+      'waiting',
+      'active',
+      'delayed',
+      'completed',
+      'failed',
+      'paused',
+    ];
+    const need = end - start + 1;
+    const pullPer = Math.min(220, Math.max(need, Math.ceil(need * 1.2)));
+    const merged: JobListItemDto[] = [];
+    for (const st of statuses) {
+      const chunk = await this.getJobs(queueName, st, 0, pullPer - 1);
+      for (const j of chunk) {
+        merged.push({ ...j, state: st });
+      }
+    }
+    merged.sort((a, b) => this.jobListSortKey(b) - this.jobListSortKey(a));
+    return merged.slice(start, end + 1);
+  }
+
+  /**
+   * Merged jobs across every known queue (`queueName` on each row).
+   * When `status === 'all'`, merges all six Bull states per queue (each row has `state`).
+   */
+  async getJobsCrossQueue(
+    status: JobStatusFilter,
+    start: number,
+    end: number,
+  ): Promise<JobListItemDto[]> {
+    const names = await this.listQueueNames();
+    const need = end - start + 1;
+    const merged: JobListItemDto[] = [];
+    if (status === 'all') {
+      const statuses: SingleQueueJobStatus[] = [
+        'waiting',
+        'active',
+        'delayed',
+        'completed',
+        'failed',
+        'paused',
+      ];
+      const pullPer = Math.min(
+        90,
+        Math.max(
+          12,
+          Math.floor(520 / Math.max(1, names.length * statuses.length)),
+        ),
+      );
+      for (const q of names) {
+        for (const st of statuses) {
+          const chunk = await this.getJobs(q, st, 0, pullPer - 1);
+          for (const j of chunk) {
+            merged.push({ ...j, state: st, queueName: q });
+          }
+        }
+      }
+    } else {
+      const pullPerQueue = Math.min(
+        220,
+        Math.max(
+          Math.ceil(need / Math.max(1, names.length)),
+          Math.min(need, 72),
+        ),
+      );
+      for (const q of names) {
+        const chunk = await this.getJobs(q, status, 0, pullPerQueue - 1);
+        for (const j of chunk) {
+          merged.push({ ...j, state: status, queueName: q });
+        }
+      }
+    }
+    merged.sort((a, b) => this.jobListSortKey(b) - this.jobListSortKey(a));
+    const seen = new Set<string>();
+    const deduped: JobListItemDto[] = [];
+    for (const row of merged) {
+      const key = `${row.queueName ?? ''}:${row.id}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      deduped.push(row);
+    }
+    return deduped.slice(start, end + 1);
+  }
+
   async getJobs(
     queueName: string,
-    status: JobStatusFilter,
+    status: SingleQueueJobStatus,
     start: number,
     end: number,
   ): Promise<JobListItemDto[]> {
@@ -748,7 +848,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     const offset = Math.max(0, parseInt(String(offsetRaw), 10) || 0);
     const limit = Math.min(Math.max(parseInt(String(limitRaw), 10) || 50, 1), 100);
 
-    const validStatuses: JobStatusFilter[] = [
+    const validStatuses: SingleQueueJobStatus[] = [
       'waiting',
       'active',
       'delayed',
@@ -779,8 +879,8 @@ export class BullseyeApiService implements OnModuleDestroy {
     } else {
       const uniqueFilters = [
         ...new Set(
-          segments.filter((segment): segment is JobStatusFilter =>
-            validStatuses.includes(segment as JobStatusFilter),
+          segments.filter((segment): segment is SingleQueueJobStatus =>
+            validStatuses.includes(segment as SingleQueueJobStatus),
           ),
         ),
       ];
@@ -880,9 +980,14 @@ export class BullseyeApiService implements OnModuleDestroy {
     perQueueRaw: number,
     /** When set, only include jobs with `finishedOn >= minFinishedOn` (unix ms). */
     minFinishedOnMs?: number,
+    queueNameFilter?: string,
   ): Promise<JobRuntimeStatsDto> {
     if (this.usingBullMq()) {
-      return this.getBullMqDriver().getJobRuntimeStats(perQueueRaw, minFinishedOnMs);
+      return this.getBullMqDriver().getJobRuntimeStats(
+        perQueueRaw,
+        minFinishedOnMs,
+        queueNameFilter,
+      );
     }
     const perQueue = Math.min(Math.max(Math.floor(perQueueRaw) || 100, 20), 400);
     const minFinishedOn =
@@ -891,7 +996,13 @@ export class BullseyeApiService implements OnModuleDestroy {
       minFinishedOnMs > 0
         ? Math.floor(minFinishedOnMs)
         : undefined;
-    const queueNames = await this.listQueueNames();
+    const allNames = await this.listQueueNames();
+    const filter = queueNameFilter?.trim();
+    const queueNames = !filter
+      ? allNames
+      : allNames.includes(filter)
+        ? [filter]
+        : [];
     const aggregateByName = new Map<
       string,
       { queueName: string; name: string; durations: number[] }

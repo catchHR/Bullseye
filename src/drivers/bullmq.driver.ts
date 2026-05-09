@@ -9,6 +9,7 @@ import {
   type JobRuntimeHistogramBucketDto,
   type JobRuntimeStatsDto,
   type JobStatusFilter,
+  type SingleQueueJobStatus,
   type QueueSummaryDto,
   type RepeatableJobDto,
   type SlowestRunDto,
@@ -22,6 +23,46 @@ type BullMqLib = typeof import('bullmq');
 
 /** BullMQ default job name when `name` is omitted in `queue.add`. */
 const BULLMQ_DEFAULT_JOB_NAME = '__default__';
+
+/**
+ * BullMQ `getRepeatableJobs()` returns `pattern` (not `cron`). Fixed intervals are
+ * usually in `every`, but legacy / key-derived rows may only have a numeric ms value
+ * in the `pattern` slot — see `Repeat.keyToData` in bullmq.
+ */
+function normalizeBullMqRepeatableScheduling(item: Record<string, unknown>): {
+  cron: string | null;
+  every: number | null;
+} {
+  const patternRaw = item['pattern'] ?? item['cron'];
+  const patternStr =
+    patternRaw != null && patternRaw !== '' ? String(patternRaw).trim() : '';
+
+  let every: number | null = null;
+  const everyRaw = item['every'];
+  if (everyRaw != null && everyRaw !== '') {
+    const n =
+      typeof everyRaw === 'number' ? everyRaw : parseInt(String(everyRaw), 10);
+    if (Number.isFinite(n) && n > 0) {
+      every = n;
+    }
+  }
+
+  let cron: string | null = null;
+  if (patternStr) {
+    if (/^\d+$/.test(patternStr)) {
+      if (every == null) {
+        const n = parseInt(patternStr, 10);
+        if (Number.isFinite(n) && n > 0) {
+          every = n;
+        }
+      }
+    } else {
+      cron = patternStr;
+    }
+  }
+
+  return { cron, every };
+}
 
 export class BullMqDriver implements QueueDriver {
   readonly backend = 'bullmq' as const;
@@ -277,13 +318,15 @@ export class BullMqDriver implements QueueDriver {
       const queue = this.getQueue(queueName);
       const repeatables = await queue.getRepeatableJobs();
       for (const item of repeatables as any[]) {
+        const row = item as Record<string, unknown>;
+        const { cron, every } = normalizeBullMqRepeatableScheduling(row);
         aggregated.push({
           queueName,
           key: String(item.key ?? ''),
           name: String(item.name ?? ''),
           id: item.id ?? null,
-          cron: item.cron ?? null,
-          every: item.every ?? null,
+          cron,
+          every,
           next: Number(item.next ?? 0),
           endDate: item.endDate ?? null,
           tz: item.tz ?? null,
@@ -355,8 +398,8 @@ export class BullMqDriver implements QueueDriver {
     };
   }
 
-  private bullmqTypesForStatus(status: JobStatusFilter): string[] {
-    const map: Record<JobStatusFilter, string[]> = {
+  private bullmqTypesForStatus(status: SingleQueueJobStatus): string[] {
+    const map: Record<SingleQueueJobStatus, string[]> = {
       waiting: ['wait'],
       paused: ['paused'],
       active: ['active'],
@@ -367,13 +410,13 @@ export class BullMqDriver implements QueueDriver {
     return map[status];
   }
 
-  private jobListAscending(status: JobStatusFilter): boolean {
+  private jobListAscending(status: SingleQueueJobStatus): boolean {
     return status !== 'completed' && status !== 'failed';
   }
 
   async getJobs(
     queueName: string,
-    status: JobStatusFilter,
+    status: SingleQueueJobStatus,
     start: number,
     end: number,
   ): Promise<JobListItemDto[]> {
@@ -563,7 +606,7 @@ export class BullMqDriver implements QueueDriver {
     const offset = Math.max(0, parseInt(String(offsetRaw), 10) || 0);
     const limit = Math.min(Math.max(parseInt(String(limitRaw), 10) || 50, 1), 100);
 
-    const validStatuses: JobStatusFilter[] = [
+    const validStatuses: SingleQueueJobStatus[] = [
       'waiting',
       'active',
       'delayed',
@@ -572,8 +615,10 @@ export class BullMqDriver implements QueueDriver {
       'paused',
     ];
     const requestedStatus = String(statusParam ?? '').trim();
-    const status: JobStatusFilter | null = validStatuses.includes(requestedStatus as JobStatusFilter)
-      ? (requestedStatus as JobStatusFilter)
+    const status: SingleQueueJobStatus | null = validStatuses.includes(
+      requestedStatus as SingleQueueJobStatus,
+    )
+      ? (requestedStatus as SingleQueueJobStatus)
       : null;
 
     const queueNames = await this.listQueueNames();
@@ -653,13 +698,20 @@ export class BullMqDriver implements QueueDriver {
   async getJobRuntimeStats(
     perQueueRaw: number,
     minFinishedOnMs?: number,
+    queueNameFilter?: string,
   ): Promise<JobRuntimeStatsDto> {
     const perQueue = Math.min(Math.max(Math.floor(perQueueRaw) || 100, 20), 400);
     const minFinishedOn =
       minFinishedOnMs != null && Number.isFinite(minFinishedOnMs) && minFinishedOnMs > 0
         ? Math.floor(minFinishedOnMs)
         : undefined;
-    const queueNames = await this.listQueueNames();
+    const allNames = await this.listQueueNames();
+    const filter = queueNameFilter?.trim();
+    const queueNames = !filter
+      ? allNames
+      : allNames.includes(filter)
+        ? [filter]
+        : [];
     const aggregateByName = new Map<
       string,
       { queueName: string; name: string; durations: number[] }

@@ -1,5 +1,5 @@
 import type { OnModuleDestroy } from '@nestjs/common';
-import type { JobStatusFilter } from '../bullseye.types';
+import type { SingleQueueJobStatus } from '../bullseye.types';
 import type {
   CrossQueueJobLogDto,
   JobListItemDto,
@@ -47,7 +47,7 @@ export interface QueueDriver extends OnModuleDestroy {
 
   getJobs(
     queueName: string,
-    status: JobStatusFilter,
+    status: SingleQueueJobStatus,
     start: number,
     end: number,
   ): Promise<JobListItemDto[]>;
@@ -78,6 +78,8 @@ export interface QueueDriver extends OnModuleDestroy {
   getJobRuntimeStats(
     perQueueRaw: number,
     minFinishedOnMs?: number,
+    /** When set, only sample this queue (must exist). */
+    queueNameFilter?: string,
   ): Promise<JobRuntimeStatsDto>;
 }
 

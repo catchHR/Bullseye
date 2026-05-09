@@ -1,4 +1,4 @@
-import type { JobStatus } from '@/lib/api';
+import type { JobStatus, JobsQueryStatus } from '@/lib/api';
 
 export type NavView = 'overview' | 'queues' | 'schedules' | 'log' | 'alerts';
 
@@ -16,13 +16,17 @@ const JOB_STATUSES: JobStatus[] = [
   'paused',
 ];
 
+function isJobsQueryStatus(value: string): value is JobsQueryStatus {
+  return value === 'all' || isJobStatus(value);
+}
+
 export type ShareableUiStateV1 = {
   v: 1;
   nav?: NavView;
   overviewTab?: OverviewDashboardTab;
   /** Selected Bull queue name */
   queue?: string | null;
-  jobStatus?: JobStatus;
+  jobStatus?: JobsQueryStatus;
   jobSearch?: string;
   jobNames?: string[];
   /** Payload path → selected canonical values */
@@ -96,7 +100,7 @@ export function decodeShareableUiState(raw: string | null): Partial<ShareableUiS
     } else if (typeof parsed.queue === 'string') {
       out.queue = parsed.queue;
     }
-    if (typeof parsed.jobStatus === 'string' && isJobStatus(parsed.jobStatus)) {
+    if (typeof parsed.jobStatus === 'string' && isJobsQueryStatus(parsed.jobStatus)) {
       out.jobStatus = parsed.jobStatus;
     }
     if (typeof parsed.jobSearch === 'string') {
@@ -152,7 +156,7 @@ type EncodeInput = {
   nav: NavView;
   overviewTab: OverviewDashboardTab;
   queue: string | null;
-  jobStatus: JobStatus;
+  jobStatus: JobsQueryStatus;
   jobSearch: string;
   jobNames: string[];
   payload: Record<string, string[]>;

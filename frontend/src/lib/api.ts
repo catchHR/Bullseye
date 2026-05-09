@@ -86,6 +86,12 @@ export type JobStatus =
   | 'failed'
   | 'paused';
 
+/** Queue jobs API tab / `status` query (includes merged “All states” view). */
+export type JobsQueryStatus = JobStatus | 'all';
+
+/** Sentinel: list jobs merged across every queue (matches backend). */
+export const ALL_QUEUES_SENTINEL = '__all_queues__';
+
 export async function fetchJob(queueName: string, jobId: string) {
   const response = await fetch(
     `${mountBasePath()}/api/queues/${encodeURIComponent(queueName)}/jobs/${encodeURIComponent(jobId)}`,
@@ -224,7 +230,7 @@ export async function duplicateQueueJob(
 
 export async function fetchJobs(
   queueName: string,
-  status: JobStatus,
+  status: JobsQueryStatus,
   start = 0,
   end = 79,
 ) {
@@ -241,7 +247,7 @@ export async function fetchJobs(
   }
   return response.json() as Promise<{
     jobs: JobRow[];
-    status: JobStatus;
+    status: JobsQueryStatus;
     start: number;
     end: number;
   }>;
@@ -274,6 +280,10 @@ export interface JobRow {
   processedOn: number | null;
   finishedOn: number | null;
   attemptsMade: number;
+  /** Bull state when listing merged or cross-queue results. */
+  state?: JobStatus;
+  /** Source queue when using {@link ALL_QUEUES_SENTINEL}. */
+  queueName?: string;
   /** Bull `job.log()` lines — only on single-job `GET …/jobs/:id`. */
   logs?: string[];
   logCount?: number;
@@ -315,6 +325,8 @@ export async function fetchJobRuntimeStats(
   perQueue = 120,
   /** Only jobs with `finishedOn` ≥ this (unix ms). Omit for no lower bound. */
   minFinishedOnMs?: number,
+  /** When set, only sample this queue. */
+  queueName?: string,
 ) {
   const params = new URLSearchParams({ perQueue: String(perQueue) });
   if (
@@ -323,6 +335,10 @@ export async function fetchJobRuntimeStats(
     minFinishedOnMs > 0
   ) {
     params.set('minFinishedOn', String(Math.floor(minFinishedOnMs)));
+  }
+  const q = queueName?.trim();
+  if (q) {
+    params.set('queue', q);
   }
   const response = await fetch(`${mountBasePath()}/api/stats/job-runtime?${params}`);
   if (!response.ok) {

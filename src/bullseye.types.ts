@@ -131,7 +131,15 @@ export type JobStatusFilter =
   | 'delayed'
   | 'completed'
   | 'failed'
-  | 'paused';
+  | 'paused'
+  /** Merged list: newest jobs across every Bull state (each row includes `state`). */
+  | 'all';
+
+/** Bull list filter for a single state (not the merged `all` view). */
+export type SingleQueueJobStatus = Exclude<JobStatusFilter, 'all'>;
+
+/** Sentinel queue name for cross-queue job listing in the dashboard. */
+export const BULLSEYE_ALL_QUEUES_SENTINEL = '__all_queues__';
 
 export interface QueueSummaryDto {
   name: string;
@@ -173,6 +181,10 @@ export interface JobListItemDto {
   processedOn: number | null;
   finishedOn: number | null;
   attemptsMade: number;
+  /** Bull state for this row when returned from merged / cross-queue list endpoints. */
+  state?: SingleQueueJobStatus;
+  /** Source queue when returned from `BULLSEYE_ALL_QUEUES_SENTINEL` listings. */
+  queueName?: string;
   /**
    * Bull `Queue#getJobLogs` — only populated on single-job fetches (`GET …/jobs/:id`),
    * not on list endpoints (avoids extra Redis round-trips per row).

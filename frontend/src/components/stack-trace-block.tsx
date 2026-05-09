@@ -113,20 +113,35 @@ function StackTraceLine({ line, lineIndex }: { line: string; lineIndex: number }
 }
 
 export function StackTraceBlock({ lines }: { lines: string[] }) {
+  const pad = String(lines.length).length;
   return (
     <div
       className={cn(
-        'max-h-64 min-w-0 max-w-full overflow-x-auto overflow-y-auto rounded-md border border-border bg-muted/25',
-        'shadow-inner',
+        'max-h-72 min-w-0 max-w-full overflow-x-auto overflow-y-auto rounded-lg border border-border bg-card',
+        'shadow-sm',
       )}
     >
-      <div className="min-w-0 divide-y divide-border/60 font-mono text-[10px] leading-relaxed">
+      <div className="min-w-0 font-mono text-[11px] leading-6">
         {lines.map((line, index) => (
           <div
             key={index}
-            className={cn('break-all px-3 py-1.5', index % 2 === 1 && 'bg-muted/35')}
+            className={cn(
+              'flex gap-2 break-all px-3 py-0.5',
+              index % 2 === 1 && 'bg-muted/40',
+              index === 0 && lines[0]?.trim() && !lines[0].trim().startsWith('at ')
+                ? 'bg-destructive/8'
+                : null,
+            )}
           >
-            <StackTraceLine line={line} lineIndex={index} />
+            <span
+              className="shrink-0 select-none tabular-nums text-muted-foreground/70"
+              style={{ minWidth: `${pad + 0.5}ch` }}
+            >
+              {index + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <StackTraceLine line={line} lineIndex={index} />
+            </span>
           </div>
         ))}
       </div>

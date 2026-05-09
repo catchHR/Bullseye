@@ -14,6 +14,7 @@ import { BullseyeAlertService } from './bullseye.alert.service';
 import { BullseyeApiService } from './bullseye.api.service';
 import {
   ALERT_TRIGGER_TYPES,
+  BULLSEYE_ALL_QUEUES_SENTINEL,
   BULLSEYE_OPTIONS,
   BullseyeModuleOptions,
   JobStatusFilter,
@@ -171,8 +172,17 @@ export class BullseyeSetupService implements OnModuleInit {
           minFinishedOnMs = Math.floor(parsed);
         }
       }
+      const queueRaw = req.query.queue;
+      const queueFilter =
+        typeof queueRaw === 'string' && queueRaw.trim().length > 0
+          ? queueRaw.trim()
+          : undefined;
       try {
-        const stats = await this.api.getJobRuntimeStats(perQueue, minFinishedOnMs);
+        const stats = await this.api.getJobRuntimeStats(
+          perQueue,
+          minFinishedOnMs,
+          queueFilter,
+        );
         res.json(stats);
       } catch (error) {
         this.logger.error(error);
@@ -479,6 +489,7 @@ export class BullseyeSetupService implements OnModuleInit {
           'completed',
           'failed',
           'paused',
+          'all',
         ];
         const status = validStatuses.includes(statusParam as JobStatusFilter)
           ? (statusParam as JobStatusFilter)
@@ -489,7 +500,14 @@ export class BullseyeSetupService implements OnModuleInit {
           parseInt(String(req.query.end), 10) || start + 19,
         );
         try {
-          const jobs = await this.api.getJobs(queueName, status, start, end);
+          let jobs;
+          if (queueName === BULLSEYE_ALL_QUEUES_SENTINEL) {
+            jobs = await this.api.getJobsCrossQueue(status, start, end);
+          } else if (status === 'all') {
+            jobs = await this.api.getJobsMergedAllStatuses(queueName, start, end);
+          } else {
+            jobs = await this.api.getJobs(queueName, status, start, end);
+          }
           res.json({ jobs, status, start, end });
         } catch (error) {
           this.logger.error(error);

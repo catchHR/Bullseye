@@ -12,6 +12,7 @@ import {
   type JobRuntimeHistogramBucketDto,
   type JobRuntimeStatsDto,
   type JobStatusFilter,
+  type SingleQueueJobStatus,
   type QueueSummaryDto,
   type RepeatableJobDto,
   type SlowestRunDto,
@@ -376,12 +377,12 @@ export class BullDriver implements QueueDriver {
     };
   }
 
-  private jobListAscending(status: JobStatusFilter): boolean {
+  private jobListAscending(status: SingleQueueJobStatus): boolean {
     return status !== 'completed' && status !== 'failed';
   }
 
-  private bullTypesForStatus(status: JobStatusFilter): Bull.JobStatus[] {
-    const map: Record<JobStatusFilter, Bull.JobStatus[]> = {
+  private bullTypesForStatus(status: SingleQueueJobStatus): Bull.JobStatus[] {
+    const map: Record<SingleQueueJobStatus, Bull.JobStatus[]> = {
       waiting: ['waiting'],
       paused: ['paused'],
       active: ['active'],
@@ -394,7 +395,7 @@ export class BullDriver implements QueueDriver {
 
   async getJobs(
     queueName: string,
-    status: JobStatusFilter,
+    status: SingleQueueJobStatus,
     start: number,
     end: number,
   ): Promise<JobListItemDto[]> {
@@ -606,7 +607,7 @@ export class BullDriver implements QueueDriver {
     const offset = Math.max(0, parseInt(String(offsetRaw), 10) || 0);
     const limit = Math.min(Math.max(parseInt(String(limitRaw), 10) || 50, 1), 100);
 
-    const validStatuses: JobStatusFilter[] = [
+    const validStatuses: SingleQueueJobStatus[] = [
       'waiting',
       'active',
       'delayed',
@@ -623,8 +624,10 @@ export class BullDriver implements QueueDriver {
       'failed',
     ];
     const requestedStatus = String(statusParam ?? '').trim();
-    const status: JobStatusFilter | null = validStatuses.includes(requestedStatus as JobStatusFilter)
-      ? (requestedStatus as JobStatusFilter)
+    const status: SingleQueueJobStatus | null = validStatuses.includes(
+      requestedStatus as SingleQueueJobStatus,
+    )
+      ? (requestedStatus as SingleQueueJobStatus)
       : null;
 
     const queueNames = await this.listQueueNames();
@@ -710,13 +713,20 @@ export class BullDriver implements QueueDriver {
     perQueueRaw: number,
     /** When set, only include jobs with `finishedOn >= minFinishedOn` (unix ms). */
     minFinishedOnMs?: number,
+    queueNameFilter?: string,
   ): Promise<JobRuntimeStatsDto> {
     const perQueue = Math.min(Math.max(Math.floor(perQueueRaw) || 100, 20), 400);
     const minFinishedOn =
       minFinishedOnMs != null && Number.isFinite(minFinishedOnMs) && minFinishedOnMs > 0
         ? Math.floor(minFinishedOnMs)
         : undefined;
-    const queueNames = await this.listQueueNames();
+    const allNames = await this.listQueueNames();
+    const filter = queueNameFilter?.trim();
+    const queueNames = !filter
+      ? allNames
+      : allNames.includes(filter)
+        ? [filter]
+        : [];
     const aggregateByName = new Map<
       string,
       { queueName: string; name: string; durations: number[] }

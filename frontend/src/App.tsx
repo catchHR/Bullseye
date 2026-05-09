@@ -41,17 +41,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 const AlertsPanelLazy = lazy(() =>
@@ -75,8 +67,8 @@ const BullseyeCommandMenuLazy = lazy(() =>
     default: module.BullseyeCommandMenu,
   })),
 );
-import { jsonToTableCellString } from '@/components/json-block';
 import { JobLogStatusMultiSelect } from '@/components/multi-select';
+import { QueueJobsTable } from '@/components/queue-jobs-table';
 import { SidebarAccountMenu } from '@/components/sidebar-account-menu';
 import { QueueJobFilters } from '@/components/queue-job-filters';
 import { QueueStatusSegmentBar } from '@/components/queue-status-segment-bar';
@@ -90,12 +82,14 @@ import {
   fetchRedisMetrics,
   fetchUiConfig,
   promoteJob,
+  ALL_QUEUES_SENTINEL,
   removeQueueJob,
   retryQueueJob,
   type BullseyeOperatorUi,
   type CrossQueueJobLogResponse,
   type JobRow,
   type JobRuntimeStats,
+  type JobsQueryStatus,
   type JobStatus,
   type QueueSummary,
   type RedisMetrics,
@@ -127,6 +121,7 @@ import {
   JOB_STATE_STYLES,
   JOB_STATE_TAB_TRIGGER_CLASSES,
   OVERVIEW_STATE_ORDER,
+  QUEUE_JOBS_TAB_ORDER,
 } from '@/lib/status-styles';
 import { cn } from '@/lib/utils';
 import {
@@ -136,6 +131,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Info,
   LayoutDashboard,
   ListTree,
   Menu,
@@ -147,10 +143,6 @@ import {
   Search,
   Timer,
   X,
-  Zap,
-  CopyPlus,
-  RotateCcw,
-  Trash2,
 } from 'lucide-react';
 import {
   DASHBOARD_TIMESPAN_OPTIONS,
@@ -170,10 +162,17 @@ const SHOW_DASHBOARD_TIMESPAN_SELECTOR = false;
 
 /** Toasts when polling detects new or removed jobs for the current status tab. */
 function reportJobListPollEvents(
-  jobStatus: JobStatus,
+  jobStatus: JobsQueryStatus,
   previousJobsById: Map<string, { name: string }>,
   nextJobs: JobRow[],
+  liveToastsEnabled: boolean,
 ): void {
+  if (!liveToastsEnabled) {
+    return;
+  }
+  if (jobStatus === 'all') {
+    return;
+  }
   if (previousJobsById.size === 0) {
     return;
   }
@@ -298,6 +297,16 @@ function countForStatus(summary: QueueSummary | undefined, status: JobStatus): n
   return summary.counts[status];
 }
 
+function sumCountsAllStates(summary: QueueSummary | undefined): number {
+  if (!summary) {
+    return 0;
+  }
+  return OVERVIEW_STATE_ORDER.reduce(
+    (acc, { status }) => acc + summary.counts[status],
+    0,
+  );
+}
+
 function statusTitle(status: JobStatus): string {
   return OVERVIEW_STATE_ORDER.find((entry) => entry.status === status)?.title ?? status;
 }
@@ -355,20 +364,67 @@ function sumTotals(queues: QueueSummary[]) {
   return totals;
 }
 
-function RedisStat({
+function sumTotalsAllStates(t: ReturnType<typeof sumTotals>): number {
+  return OVERVIEW_STATE_ORDER.reduce((acc, { status }) => acc + t[status], 0);
+}
+
+const REDIS_TOOLTIP_USED_MEMORY =
+  'Memory Redis has allocated for data and overhead (RSS-related fields are separate). If you set maxmemory, compare to that limit: sustained growth toward 100% risks evictions or write errors depending on policy. Sudden jumps often correlate with large queue backlogs or big payloads.';
+
+const REDIS_TOOLTIP_PEAK_MEMORY =
+  'High-water mark of used memory since the server started. If peak is far above current use, you may have had a spike (batch jobs, large keys) or fragmentation. Together with fragmentation ratio, it helps decide if a restart or memory policy change is worth planning.';
+
+const REDIS_TOOLTIP_CONNECTED_CLIENTS =
+  'Number of client connections (apps, workers, Bullseye, replicas). A steady count is normal; a fast climb can mean connection leaks or many short-lived clients. “Blocked” clients are waiting on blocking commands (e.g. BLPOP-style); a high blocked count can mean workers stalling on Redis.';
+
+const REDIS_TOOLTIP_OPS_PER_SEC =
+  'Approximate commands processed per second (instantaneous). Useful as a rough load gauge: higher with more enqueue/consume activity. Compare across time rather than obsessing over absolute values—sudden drops with app slowness can point to Redis or network contention.';
+
+const REDIS_TOOLTIP_HIT_RATE =
+  'Share of keyspace reads served from Redis memory vs. needing a disk load (for datasets larger than RAM this matters more). Low hit rate with high misses can mean cold cache, insufficient memory, or access patterns that churn keys. Pair with memory and latency when tuning.';
+
+const REDIS_TOOLTIP_DB_KEYS =
+  'Approximate number of keys in the selected logical database (from DBSIZE). Bull/BullMQ uses many keys per queue; a large count is expected at scale. Watch growth rate: runaway keys can mean stuck jobs, missing cleanup, or duplicate deployments writing to the same DB.';
+
+const REDIS_TOOLTIP_UPTIME =
+  'Time since the Redis process started. Short uptime after incidents may explain gaps in charts. Very long uptime is fine; memory fragmentation can creep up over time—compare with peak memory and fragmentation ratio.';
+
+const REDIS_TOOLTIP_ROLE =
+  'Instance role (e.g. master, replica, sentinel-managed). For Bull queues you usually want workers and the API talking to the same writable primary. Read replicas are fine for observability but not for enqueue/consume unless you know what you are doing.';
+
+function RedisMetricCard({
   label,
   value,
   hint,
+  info,
 }: {
   label: string;
   value: string;
   hint?: string;
+  /** Tooltip: what the metric means + brief interpretation */
+  info: string;
 }) {
   return (
     <div className="rounded-md border border-border bg-muted/15 px-3 py-2">
-      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          {label}
+        </p>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`About ${label}`}
+            >
+              <Info className="h-3.5 w-3.5 opacity-80" strokeWidth={2} aria-hidden />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[20rem] text-left text-xs leading-snug">
+            {info}
+          </TooltipContent>
+        </Tooltip>
+      </div>
       <p className="mt-1 font-mono text-sm font-semibold tabular-nums">{value}</p>
       {hint ? (
         <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{hint}</p>
@@ -400,21 +456,47 @@ const QUEUE_JOBS_PAGE_SIZE = 500;
 
 const POLLING_INTERVAL_OPTIONS: { valueMs: number; label: string }[] = [
   { valueMs: 0, label: 'Off' },
-  { valueMs: 3000, label: '3s' },
   { valueMs: 5000, label: '5s' },
-  { valueMs: 8000, label: '8s' },
-  { valueMs: 15000, label: '15s' },
+  { valueMs: 10000, label: '10s' },
+  { valueMs: 20000, label: '20s' },
   { valueMs: 30000, label: '30s' },
+  { valueMs: 60000, label: '60s' },
 ];
+
+const POLLING_INTERVAL_LEGACY: Record<number, number> = {
+  3000: 5000,
+  8000: 10000,
+  15000: 20000,
+};
 
 function readStoredPollingIntervalMs(): number {
   if (typeof window === 'undefined') {
-    return 8000;
+    return 10000;
   }
   const allowed = new Set(POLLING_INTERVAL_OPTIONS.map((option) => option.valueMs));
   const raw = window.localStorage.getItem(POLLING_INTERVAL_STORAGE_KEY);
   const parsed = raw != null ? Number.parseInt(raw, 10) : Number.NaN;
-  return allowed.has(parsed) ? parsed : 8000;
+  if (allowed.has(parsed)) {
+    return parsed;
+  }
+  const mapped = POLLING_INTERVAL_LEGACY[parsed];
+  if (mapped != null && allowed.has(mapped)) {
+    return mapped;
+  }
+  return 10000;
+}
+
+const LIVE_JOB_TOASTS_STORAGE_KEY = 'bullseye-live-job-toasts';
+
+function readStoredLiveJobToastsEnabled(): boolean {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+  const raw = window.localStorage.getItem(LIVE_JOB_TOASTS_STORAGE_KEY);
+  if (raw === '0') {
+    return false;
+  }
+  return true;
 }
 
 const bullseyeLogoUrl = `${import.meta.env.BASE_URL}bullseye_logo.svg`;
@@ -621,7 +703,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedQueue, setSelectedQueue] = useState<string | null>(() => urlSnap?.queue ?? null);
-  const [jobStatus, setJobStatus] = useState<JobStatus>(() => urlSnap?.jobStatus ?? 'waiting');
+  const [jobStatus, setJobStatus] = useState<JobsQueryStatus>(() => urlSnap?.jobStatus ?? 'waiting');
+  const [jobWriteQueueName, setJobWriteQueueName] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   /** Inclusive start index for `fetchJobs` (next chunk = +QUEUE_JOBS_PAGE_SIZE). */
@@ -689,6 +772,10 @@ export default function App() {
     };
   }, []);
   const [pollIntervalMs, setPollIntervalMs] = useState<number>(() => readStoredPollingIntervalMs());
+  const [liveJobToastsEnabled, setLiveJobToastsEnabled] = useState<boolean>(() =>
+    readStoredLiveJobToastsEnabled(),
+  );
+  const [performanceStatsQueue, setPerformanceStatsQueue] = useState<string>('');
   const [dashboardTimespanId, setDashboardTimespanId] = useState<DashboardTimespanId>('all');
   /** Below `md`: full-screen job panel after choosing a queue; list and jobs are never stacked. */
   const [mobileQueueJobsOpen, setMobileQueueJobsOpen] = useState(false);
@@ -713,6 +800,11 @@ export default function App() {
     }
     setPollIntervalMs(nextIntervalMs);
     window.localStorage.setItem(POLLING_INTERVAL_STORAGE_KEY, String(nextIntervalMs));
+  }, []);
+
+  const handleLiveJobToastsChange = useCallback((nextEnabled: boolean) => {
+    setLiveJobToastsEnabled(nextEnabled);
+    window.localStorage.setItem(LIVE_JOB_TOASTS_STORAGE_KEY, nextEnabled ? '1' : '0');
   }, []);
 
   const handleDashboardTimespanChange = useCallback((nextTimespanId: DashboardTimespanId) => {
@@ -742,11 +834,18 @@ export default function App() {
     if (!jobDetailContext || nav !== 'queues') {
       return;
     }
-    if (selectedQueue == null || jobDetailContext.queueName !== selectedQueue) {
+    if (selectedQueue == null) {
       return;
     }
+    if (selectedQueue !== ALL_QUEUES_SENTINEL && jobDetailContext.queueName !== selectedQueue) {
+      return;
+    }
+    const rowId =
+      selectedQueue === ALL_QUEUES_SENTINEL
+        ? `${jobDetailContext.queueName}:${jobDetailContext.job.id}`
+        : jobDetailContext.job.id;
     const rowElement = document.querySelector(
-      `[data-bullseye-job-row="${CSS.escape(jobDetailContext.job.id)}"]`,
+      `[data-bullseye-job-row="${CSS.escape(rowId)}"]`,
     );
     rowElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [jobDetailContext, nav, selectedQueue]);
@@ -824,6 +923,18 @@ export default function App() {
   const handleNavSelect = useCallback((view: NavView) => {
     setNav(view);
     setMobileNavOpen(false);
+  }, []);
+
+  /** Dashboard workload tiles → Queues (all queues) + status tab */
+  const goToAllQueuesJobView = useCallback((status: JobsQueryStatus) => {
+    setJobDetailContext(null);
+    setNav('queues');
+    setSelectedQueue(ALL_QUEUES_SENTINEL);
+    setJobStatus(status);
+    setMobileNavOpen(false);
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      setMobileQueueJobsOpen(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -928,6 +1039,7 @@ export default function App() {
   const openCreateJobModalForQueue = useCallback(
     (queueName: string) => {
       selectQueueForView(queueName);
+      setJobWriteQueueName(queueName);
       setJobWriteMode('create');
       setJobWriteSourceId(undefined);
       setJobWriteSeed({ name: '', data: {}, opts: {} });
@@ -938,9 +1050,16 @@ export default function App() {
 
   const openDuplicateJobModal = useCallback(
     (job: JobRow) => {
-      if (!selectedQueue) {
+      const targetQueue =
+        job.queueName ??
+        (selectedQueue != null && selectedQueue !== ALL_QUEUES_SENTINEL
+          ? selectedQueue
+          : null);
+      if (!targetQueue) {
+        toast.error('Could not determine target queue for duplicate.');
         return;
       }
+      setJobWriteQueueName(targetQueue);
       setJobWriteMode('duplicate');
       setJobWriteSourceId(job.id);
       setJobWriteSeed({
@@ -975,7 +1094,13 @@ export default function App() {
       const data = await fetchQueues();
       setQueues(data);
       setSelectedQueue((previous) => {
-        if (previous && data.some((queue) => queue.name === previous)) {
+        if (!previous) {
+          return data[0]?.name ?? null;
+        }
+        if (previous === ALL_QUEUES_SENTINEL) {
+          return ALL_QUEUES_SENTINEL;
+        }
+        if (data.some((queue) => queue.name === previous)) {
           return previous;
         }
         return data[0]?.name ?? null;
@@ -1033,14 +1158,18 @@ export default function App() {
       const durationMs = dashboardTimespanDurationMs(dashboardTimespanId);
       const minFinishedOnMs =
         durationMs == null ? undefined : Date.now() - durationMs;
-      const data = await fetchJobRuntimeStats(120, minFinishedOnMs);
+      const data = await fetchJobRuntimeStats(
+        120,
+        minFinishedOnMs,
+        performanceStatsQueue.trim() || undefined,
+      );
       setRuntimeStats(data);
     } catch {
       setRuntimeStats(null);
     } finally {
       setRuntimeStatsLoading(false);
     }
-  }, [dashboardTimespanId]);
+  }, [dashboardTimespanId, performanceStatsQueue]);
 
   const loadJobLog = useCallback(async (fromPoll = false) => {
     try {
@@ -1113,6 +1242,18 @@ export default function App() {
 
   const totals = useMemo(() => sumTotals(queues), [queues]);
 
+  const aggregateQueueCounts = useMemo(
+    () => ({
+      waiting: totals.waiting,
+      active: totals.active,
+      completed: totals.completed,
+      failed: totals.failed,
+      delayed: totals.delayed,
+      paused: totals.paused,
+    }),
+    [totals],
+  );
+
   useEffect(() => {
     const totalActive = totals.active;
     setActiveSeries((previous) => {
@@ -1184,12 +1325,18 @@ export default function App() {
         fromPoll &&
         nav === 'queues' &&
         !jobsPollSkipEventsRef.current &&
-        previousById.size > 0
+        previousById.size > 0 &&
+        jobStatus !== 'all' &&
+        selectedQueue !== ALL_QUEUES_SENTINEL
       ) {
-        reportJobListPollEvents(jobStatus, previousById, nextJobs);
+        reportJobListPollEvents(jobStatus, previousById, nextJobs, liveJobToastsEnabled);
       }
+      const pollRowKey = (jobRow: JobRow) =>
+        selectedQueue === ALL_QUEUES_SENTINEL && jobRow.queueName
+          ? `${jobRow.queueName}:${jobRow.id}`
+          : jobRow.id;
       jobsPollPreviousByIdRef.current = new Map(
-        nextJobs.map((jobRow) => [jobRow.id, { name: jobRow.name }]),
+        nextJobs.map((jobRow) => [pollRowKey(jobRow), { name: jobRow.name }]),
       );
       jobsPollSkipEventsRef.current = false;
       setJobs(nextJobs);
@@ -1230,7 +1377,15 @@ export default function App() {
         window.clearInterval(intervalId);
       }
     };
-  }, [selectedQueue, jobStatus, nav, pollIntervalMs, jobsOffset, jobsManualRefreshToken]);
+  }, [
+    selectedQueue,
+    jobStatus,
+    nav,
+    pollIntervalMs,
+    jobsOffset,
+    jobsManualRefreshToken,
+    liveJobToastsEnabled,
+  ]);
 
   const skipFilterResetOnSelectedQueueOrJobStatusEffectRef = useRef(true);
 
@@ -1380,16 +1535,23 @@ export default function App() {
     if (!runtimeStats) {
       return [];
     }
-    return runtimeStats.byJobName.slice(0, 12).map((row) => ({
-      chartLabel:
-        row.name.length > 26 ? `${row.name.slice(0, 24)}…` : row.name,
-      queueShort:
-        row.queueName.length > 18
-          ? `${row.queueName.slice(0, 16)}…`
-          : row.queueName,
-      avgMs: Math.round(row.avgMs),
-      fullLabel: `${row.queueName} · ${row.name}`,
-    }));
+    const slice = runtimeStats.byJobName.slice(0, 12);
+    const n = slice.length;
+    return slice.map((row, index) => {
+      const position = n <= 1 ? 0 : index / (n - 1);
+      const hue = 8 + (132 - 8) * position;
+      return {
+        chartLabel:
+          row.name.length > 26 ? `${row.name.slice(0, 24)}…` : row.name,
+        queueShort:
+          row.queueName.length > 18
+            ? `${row.queueName.slice(0, 16)}…`
+            : row.queueName,
+        avgMs: Math.round(row.avgMs),
+        fullLabel: `${row.queueName} · ${row.name}`,
+        barFill: `hsl(${hue} 70% 40%)`,
+      };
+    });
   }, [runtimeStats]);
 
   return (
@@ -1482,6 +1644,27 @@ export default function App() {
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex max-w-[9rem] items-center gap-1.5 sm:max-w-none sm:gap-2">
+                  <Switch
+                    id="bullseye-live-job-toasts"
+                    checked={liveJobToastsEnabled}
+                    onCheckedChange={(checked) => handleLiveJobToastsChange(checked)}
+                    aria-label="Live toasts for queue job list polling"
+                  />
+                  <Label
+                    htmlFor="bullseye-live-job-toasts"
+                    className="cursor-pointer truncate text-[10px] text-muted-foreground sm:whitespace-nowrap sm:text-[11px]"
+                  >
+                    Live toasts
+                  </Label>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end" className="max-w-[14rem] leading-snug">
+                Notify when polling shows new completed/failed jobs or jobs leaving active/waiting (Queues view).
+              </TooltipContent>
+            </Tooltip>
             {SHOW_DASHBOARD_TIMESPAN_SELECTOR ? (
               <Select
                 value={dashboardTimespanId}
@@ -1608,13 +1791,41 @@ export default function App() {
                 <strong className="font-medium text-foreground">Performance</strong> uses a sample of the newest
                 completed/failed jobs per queue (see tab intro).
               </p>
-              <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+                <button
+                  type="button"
+                  onClick={() => goToAllQueuesJobView('all')}
+                  className={cn(
+                    'rounded-xl border border-border bg-card text-left text-card-foreground shadow-none',
+                    'transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  )}
+                  aria-label="Open all queues, all job states"
+                >
+                  <div className="p-3">
+                    <p className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full ring-2 ring-border ring-inset bg-muted-foreground/35"
+                        aria-hidden
+                      />
+                      All jobs
+                    </p>
+                    <p className="mt-1 font-mono text-xl font-semibold tabular-nums">
+                      {sumTotalsAllStates(totals)}
+                    </p>
+                  </div>
+                </button>
                 {OVERVIEW_STATE_ORDER.map(({ status, title }) => (
-                  <Card
+                  <button
                     key={status}
-                    className="shadow-none border border-border bg-card"
+                    type="button"
+                    onClick={() => goToAllQueuesJobView(status)}
+                    className={cn(
+                      'rounded-xl border border-border bg-card text-left text-card-foreground shadow-none',
+                      'transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    )}
+                    aria-label={`Open all queues: ${title}`}
                   >
-                    <CardContent className="p-3">
+                    <div className="p-3">
                       <p className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                         <span
                           className={cn('h-1.5 w-1.5 shrink-0 rounded-full', JOB_STATE_STYLES[status].dot)}
@@ -1625,8 +1836,8 @@ export default function App() {
                       <p className="mt-1 font-mono text-xl font-semibold tabular-nums">
                         {totals[status]}
                       </p>
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </button>
                 ))}
               </div>
 
@@ -1706,9 +1917,10 @@ export default function App() {
                 </CardHeader>
                 <CardContent className="pb-4">
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    <RedisStat
+                    <RedisMetricCard
                       label="Used memory"
                       value={formatBytesBinary(redisMetrics?.memory.usedBytes)}
+                      info={REDIS_TOOLTIP_USED_MEMORY}
                       hint={
                         redisMetrics?.memory.maxBytes &&
                         redisMetrics.memory.maxBytes > 0 &&
@@ -1721,29 +1933,31 @@ export default function App() {
                           : undefined
                       }
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Peak memory"
                       value={formatBytesBinary(redisMetrics?.memory.peakBytes)}
+                      info={REDIS_TOOLTIP_PEAK_MEMORY}
                       hint={
                         redisMetrics?.memory.fragmentationRatio != null
                           ? `Frag ${redisMetrics.memory.fragmentationRatio.toFixed(2)}`
                           : undefined
                       }
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Connected clients"
                       value={
                         redisMetrics?.clients.connected != null
                           ? redisMetrics.clients.connected.toLocaleString('en-US')
                           : '—'
                       }
+                      info={REDIS_TOOLTIP_CONNECTED_CLIENTS}
                       hint={
                         redisMetrics?.clients.blocked != null
                           ? `${redisMetrics.clients.blocked.toLocaleString('en-US')} blocked`
                           : undefined
                       }
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Ops/sec"
                       value={
                         redisMetrics?.opsPerSec != null
@@ -1752,8 +1966,9 @@ export default function App() {
                             )
                           : '—'
                       }
+                      info={REDIS_TOOLTIP_OPS_PER_SEC}
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Keyspace hit rate"
                       value={
                         redisMetrics?.keyspace.hitRate != null
@@ -1762,6 +1977,7 @@ export default function App() {
                             )}%`
                           : '—'
                       }
+                      info={REDIS_TOOLTIP_HIT_RATE}
                       hint={
                         redisMetrics?.keyspace.hits != null &&
                         redisMetrics?.keyspace.misses != null
@@ -1773,15 +1989,16 @@ export default function App() {
                           : undefined
                       }
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="DB keys"
                       value={
                         redisMetrics?.dbKeys != null
                           ? redisMetrics.dbKeys.toLocaleString('en-US')
                           : '—'
                       }
+                      info={REDIS_TOOLTIP_DB_KEYS}
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Uptime"
                       value={
                         redisMetrics?.uptimeSec != null
@@ -1790,10 +2007,12 @@ export default function App() {
                             )
                           : '—'
                       }
+                      info={REDIS_TOOLTIP_UPTIME}
                     />
-                    <RedisStat
+                    <RedisMetricCard
                       label="Role"
                       value={redisMetrics?.role ?? '—'}
+                      info={REDIS_TOOLTIP_ROLE}
                       hint={
                         redisMetrics?.redisVersion
                           ? `Redis ${redisMetrics.redisVersion}`
@@ -1828,7 +2047,7 @@ export default function App() {
                       <Line
                         type="monotone"
                         dataKey="active"
-                        stroke="hsl(var(--chart-4))"
+                        stroke="hsl(var(--foreground))"
                         strokeWidth={2}
                         dot={false}
                       />
@@ -1839,11 +2058,42 @@ export default function App() {
                 </TabsContent>
 
                 <TabsContent value="performance" className="mt-4 space-y-4">
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Metrics use a <strong className="font-medium text-foreground">sample</strong> of the newest
-                    completed and failed jobs per queue in Redis (up to the per-queue cap). Histogram, per-job
-                    averages, slowest runs, and sampled counts are all derived from that same sample.
-                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+                    <p className="max-w-[52rem] text-[11px] leading-relaxed text-muted-foreground">
+                      Metrics use a <strong className="font-medium text-foreground">sample</strong> of the newest
+                      completed and failed jobs per queue in Redis (up to the per-queue cap). Histogram, per-job
+                      averages, slowest runs, and sampled counts are all derived from that same sample.
+                    </p>
+                    <div className="flex w-full min-w-0 flex-col gap-1 sm:w-64">
+                      <Label htmlFor="performance-queue-filter" className="text-[10px] text-muted-foreground">
+                        Queue filter
+                      </Label>
+                      <Select
+                        value={performanceStatsQueue === '' ? '__all__' : performanceStatsQueue}
+                        onValueChange={(value) =>
+                          setPerformanceStatsQueue(value === '__all__' ? '' : value)
+                        }
+                      >
+                        <SelectTrigger
+                          id="performance-queue-filter"
+                          className="h-9 text-xs"
+                          aria-label="Performance metrics queue filter"
+                        >
+                          <SelectValue placeholder="All queues" />
+                        </SelectTrigger>
+                        <SelectContent position="popper" className="z-[80]">
+                          <SelectItem value="__all__" className="text-xs">
+                            All queues
+                          </SelectItem>
+                          {queues.map((queue) => (
+                            <SelectItem key={queue.name} value={queue.name} className="font-mono text-xs">
+                              {queue.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <Card className="shadow-none">
@@ -1946,10 +2196,13 @@ export default function App() {
                               />
                               <Bar
                                 dataKey="avgMs"
-                                fill="hsl(var(--chart-3))"
                                 radius={[0, 4, 4, 0]}
                                 maxBarSize={24}
-                              />
+                              >
+                                {topAvgRuntimeChart.map((row, barIndex) => (
+                                  <Cell key={`avg-${barIndex}`} fill={row.barFill} />
+                                ))}
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         )}
@@ -1995,12 +2248,19 @@ export default function App() {
                                 tickLine={false}
                               />
                               <RechartsTooltip {...RECHARTS_TOOLTIP_PROPS} />
-                              <Bar
-                                dataKey="count"
-                                fill="hsl(var(--chart-5) / 0.92)"
-                                radius={[3, 3, 0, 0]}
-                                maxBarSize={48}
-                              />
+                              <Bar dataKey="count" radius={[3, 3, 0, 0]} maxBarSize={48}>
+                                {runtimeStats.durationHistogram.map((_, bucketIndex, arr) => {
+                                  const position =
+                                    arr.length <= 1 ? 0.5 : bucketIndex / (arr.length - 1);
+                                  const lightness = 30 + 24 * (1 - position);
+                                  return (
+                                    <Cell
+                                      key={`hist-${bucketIndex}`}
+                                      fill={`hsl(152 52% ${lightness}%)`}
+                                    />
+                                  );
+                                })}
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         )}
@@ -2054,7 +2314,7 @@ export default function App() {
                               />
                               <Bar
                                 dataKey="failurePct"
-                                fill="hsl(var(--chart-2))"
+                                fill="hsl(0 72% 48%)"
                                 radius={[3, 3, 0, 0]}
                                 maxBarSize={40}
                               />
@@ -2089,9 +2349,18 @@ export default function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {slowestRunsForTimespan.map((run) => (
+                                {slowestRunsForTimespan.map((run, runIndex) => {
+                                  const heat =
+                                    slowestRunsForTimespan.length <= 1
+                                      ? 0
+                                      : runIndex / (slowestRunsForTimespan.length - 1);
+                                  const durationHue = 12 + (95 - 12) * heat;
+                                  return (
                                   <tr key={`${run.queueName}:${run.id}:${run.finishedOn}`} className="border-b border-border last:border-0">
-                                    <td className="px-3 py-1.5 font-mono tabular-nums">
+                                    <td
+                                      className="px-3 py-1.5 font-mono tabular-nums"
+                                      style={{ color: `hsl(${durationHue} 65% 38%)` }}
+                                    >
                                       {formatDurationCompact(run.durationMs)}
                                     </td>
                                     <td className="px-3 py-1.5">
@@ -2099,8 +2368,8 @@ export default function App() {
                                         className={cn(
                                           'rounded px-1.5 py-px text-[10px] font-medium uppercase',
                                           run.status === 'failed'
-                                            ? 'bg-muted text-foreground'
-                                            : 'bg-muted/60 text-muted-foreground',
+                                            ? 'border border-red-500/35 bg-red-500/12 text-red-800 dark:text-red-300'
+                                            : 'border border-emerald-500/35 bg-emerald-500/12 text-emerald-800 dark:text-emerald-300',
                                         )}
                                       >
                                         {run.status}
@@ -2116,7 +2385,8 @@ export default function App() {
                                       {formatTimestampPretty(run.finishedOn)}
                                     </td>
                                   </tr>
-                                ))}
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -2154,6 +2424,35 @@ export default function App() {
                   </p>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5 md:p-1">
+                  <div className="mb-1.5 flex min-h-11 items-stretch gap-0.5 md:min-h-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => selectQueueForView(ALL_QUEUES_SENTINEL)}
+                      className={cn(
+                        'h-auto min-h-11 min-w-0 flex-1 flex-col items-stretch justify-start gap-0.5 rounded-md px-2 py-2 text-left text-xs font-normal whitespace-normal active:bg-muted/80 md:min-h-0 md:py-1.5',
+                        selectedQueue === ALL_QUEUES_SENTINEL
+                          ? 'bg-muted font-medium text-foreground hover:bg-muted'
+                          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      <span className="flex w-full min-w-0 flex-wrap items-center justify-start gap-x-2 gap-y-1">
+                        <span className="min-w-0 flex-1 text-left font-medium">
+                          All queues
+                        </span>
+                        <ChevronRight
+                          className={cn(
+                            'h-4 w-4 shrink-0 text-muted-foreground md:h-3 md:w-3',
+                            selectedQueue === ALL_QUEUES_SENTINEL
+                              ? 'md:opacity-100'
+                              : 'opacity-70 md:opacity-0',
+                          )}
+                          aria-hidden
+                        />
+                      </span>
+                      <QueueStatusSegmentBar counts={aggregateQueueCounts} />
+                    </Button>
+                  </div>
                   {queues.map((queue) => (
                     <div
                       key={queue.name}
@@ -2240,7 +2539,7 @@ export default function App() {
               >
                 {!selectedQueue ? (
                   <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
-                    Select a queue
+                    Select a queue or &quot;All queues&quot;
                   </div>
                 ) : (
                   <>
@@ -2261,23 +2560,30 @@ export default function App() {
                         <TooltipContent side="bottom">Back to queue list</TooltipContent>
                       </Tooltip>
                       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 md:flex-auto">
-                        {selectedQueueSummary?.isPaused ? (
+                        {selectedQueue !== ALL_QUEUES_SENTINEL && selectedQueueSummary?.isPaused ? (
                           <Pause
                             className="h-4 w-4 shrink-0 text-muted-foreground"
                             strokeWidth={1.75}
                             aria-label="Queue is paused"
                           />
                         ) : null}
-                        <span className="min-w-0 truncate font-mono text-sm font-semibold">
-                          {selectedQueue}
+                        <span
+                          className={cn(
+                            'min-w-0 truncate text-sm font-semibold',
+                            selectedQueue === ALL_QUEUES_SENTINEL
+                              ? 'font-sans'
+                              : 'font-mono',
+                          )}
+                        >
+                          {selectedQueue === ALL_QUEUES_SENTINEL ? 'All queues' : selectedQueue}
                         </span>
-                        {selectedQueueSummary?.isPaused ? (
+                        {selectedQueue !== ALL_QUEUES_SENTINEL && selectedQueueSummary?.isPaused ? (
                           <Badge variant="outline" className="shrink-0 text-[10px]">
                             paused
                           </Badge>
                         ) : null}
                       </div>
-                      {selectedQueue ? (
+                      {selectedQueue && selectedQueue !== ALL_QUEUES_SENTINEL ? (
                         <QueueActionsMenu
                           queueName={selectedQueue}
                           isPaused={Boolean(selectedQueueSummary?.isPaused)}
@@ -2294,22 +2600,38 @@ export default function App() {
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4">
                       <Tabs
                         value={jobStatus}
-                        onValueChange={(value) => setJobStatus(value as JobStatus)}
+                        onValueChange={(value) => setJobStatus(value as JobsQueryStatus)}
                       >
                         <TabsList className="no-scrollbar h-auto w-full shrink-0 flex-wrap justify-start gap-1 overflow-x-auto scroll-pb-1 border-0 bg-transparent p-0 pb-0.5 [-webkit-overflow-scrolling:touch]">
-                          {OVERVIEW_STATE_ORDER.map(({ status, title }) => {
-                            const tabCount = countForStatus(selectedQueueSummary, status);
-                            const styles = JOB_STATE_STYLES[status];
+                          {QUEUE_JOBS_TAB_ORDER.map(({ status, title }) => {
+                            const tabCount =
+                              status === 'all'
+                                ? selectedQueue === ALL_QUEUES_SENTINEL
+                                  ? sumTotalsAllStates(totals)
+                                  : sumCountsAllStates(selectedQueueSummary)
+                                : selectedQueue === ALL_QUEUES_SENTINEL
+                                  ? totals[status]
+                                  : countForStatus(selectedQueueSummary, status);
                             return (
                               <TabsTrigger
                                 key={status}
                                 value={status}
                                 className={cn('gap-1.5 text-[11px]', JOB_STATE_TAB_TRIGGER_CLASSES)}
                               >
-                                <span
-                                  className={cn('h-1.5 w-1.5 shrink-0 rounded-full', styles.dot)}
-                                  aria-hidden
-                                />
+                                {status === 'all' ? (
+                                  <span
+                                    className="h-1.5 w-1.5 shrink-0 rounded-full ring-2 ring-border ring-inset bg-muted-foreground/35"
+                                    aria-hidden
+                                  />
+                                ) : (
+                                  <span
+                                    className={cn(
+                                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                                      JOB_STATE_STYLES[status].dot,
+                                    )}
+                                    aria-hidden
+                                  />
+                                )}
                                 <span>{title}</span>
                                 <span className="min-w-[1.25rem] rounded-md bg-muted/60 px-1.5 py-px text-center font-mono text-[10px] tabular-nums text-muted-foreground group-data-[state=active]:bg-muted group-data-[state=active]:text-foreground">
                                   {tabCount}
@@ -2336,7 +2658,8 @@ export default function App() {
                           </div>
                         </div>
 
-                        <JobsTable
+                        <QueueJobsTable
+                          allJobsInSlice={jobs}
                           jobs={filteredJobs}
                           totalLoaded={jobs.length}
                           pageOffset={jobsOffset}
@@ -2360,12 +2683,22 @@ export default function App() {
                           onDuplicateJob={openDuplicateJobModal}
                           onJobsMutated={() => bumpJobsRefresh()}
                           onSelectJob={(job) => {
-                            if (selectedQueue) {
-                              setJobDetailContext({
-                                job,
-                                queueName: selectedQueue,
-                              });
+                            if (!selectedQueue) {
+                              return;
                             }
+                            const rowQueue =
+                              job.queueName ??
+                              (selectedQueue !== ALL_QUEUES_SENTINEL ? selectedQueue : null);
+                            if (!rowQueue) {
+                              return;
+                            }
+                            setJobDetailContext({
+                              job,
+                              queueName: rowQueue,
+                              modalJobStatus:
+                                job.state ??
+                                (jobStatus !== 'all' ? jobStatus : undefined),
+                            });
                           }}
                         />
                       </div>
@@ -2727,7 +3060,11 @@ export default function App() {
           <JobDetailDrawerLazy
             open
             queueName={jobDetailContext.queueName}
-            jobStatus={jobDetailContext.modalJobStatus ?? jobStatus}
+            jobStatus={
+              jobDetailContext.modalJobStatus ??
+              jobDetailContext.job.state ??
+              (jobStatus !== 'all' ? jobStatus : 'waiting')
+            }
             initialJob={jobDetailContext.job}
             onClose={() => setJobDetailContext(null)}
             onDuplicate={openDuplicateJobModal}
@@ -2747,616 +3084,31 @@ export default function App() {
         </Suspense>
       )}
 
-      {selectedQueue && jobWriteSeed ? (
-        <QueueJobWriteModal
-          open={jobWriteOpen}
-          onOpenChange={setJobWriteOpen}
-          mode={jobWriteMode}
-          queueName={selectedQueue}
-          sourceJobId={jobWriteSourceId}
-          initialJobName={jobWriteSeed.name}
-          initialData={jobWriteSeed.data}
-          initialOpts={jobWriteSeed.opts}
-          onSuccess={() => bumpJobsRefresh()}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function JobsTable({
-  jobs,
-  totalLoaded,
-  pageOffset,
-  pageSize,
-  canPageBack,
-  canPageForward,
-  onPageBack,
-  onPageForward,
-  loading,
-  onSelectJob,
-  fillHeight,
-  queueName,
-  jobStatus,
-  highlightJobKey,
-  onPromoteJob,
-  onDuplicateJob,
-  onJobsMutated,
-}: {
-  jobs: JobRow[];
-  totalLoaded: number;
-  pageOffset: number;
-  pageSize: number;
-  canPageBack: boolean;
-  canPageForward: boolean;
-  onPageBack: () => void;
-  onPageForward: () => void;
-  loading: boolean;
-  onSelectJob: (job: JobRow) => void;
-  fillHeight?: boolean;
-  queueName: string;
-  jobStatus: JobStatus;
-  highlightJobKey: string | null;
-  onPromoteJob: (queueName: string, jobId: string) => void | Promise<void>;
-  onDuplicateJob: (job: JobRow) => void;
-  onJobsMutated: () => void;
-}) {
-  const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
-  const [removeJobsDialog, setRemoveJobsDialog] = useState<
-    null | { kind: 'bulk'; jobIds: string[] } | { kind: 'single'; jobId: string }
-  >(null);
-  const [removeJobsInProgress, setRemoveJobsInProgress] = useState(false);
-
-  const showsFilteredHint = totalLoaded > 0 && jobs.length !== totalLoaded;
-  const showFailureColumn = jobStatus === 'failed';
-  const tableColumnCount = 9 + (showFailureColumn ? 1 : 0);
-
-  useEffect(() => {
-    setSelectedJobIds(new Set());
-  }, [queueName, jobStatus, pageOffset]);
-
-  useEffect(() => {
-    const allowedIds = new Set(jobs.map((jobRow) => jobRow.id));
-    setSelectedJobIds((previous) => {
-      let changed = false;
-      const next = new Set<string>();
-      for (const jobId of previous) {
-        if (allowedIds.has(jobId)) {
-          next.add(jobId);
-        } else {
-          changed = true;
-        }
-      }
-      if (!changed && next.size === previous.size) {
-        return previous;
-      }
-      return next;
-    });
-  }, [jobs]);
-
-  const allVisibleSelected =
-    jobs.length > 0 && jobs.every((jobRow) => selectedJobIds.has(jobRow.id));
-  const someVisibleSelected = jobs.some((jobRow) => selectedJobIds.has(jobRow.id));
-  const headerCheckboxChecked: boolean | 'indeterminate' = allVisibleSelected
-    ? true
-    : someVisibleSelected
-      ? 'indeterminate'
-      : false;
-
-  const toggleJobSelected = useCallback((jobId: string, nextChecked: boolean) => {
-    setSelectedJobIds((previous) => {
-      const next = new Set(previous);
-      if (nextChecked) {
-        next.add(jobId);
-      } else {
-        next.delete(jobId);
-      }
-      return next;
-    });
-  }, []);
-
-  const handleHeaderSelectAll = useCallback(
-    (checked: boolean | 'indeterminate') => {
-      if (checked === true) {
-        setSelectedJobIds(new Set(jobs.map((jobRow) => jobRow.id)));
-      } else {
-        setSelectedJobIds(new Set());
-      }
-    },
-    [jobs],
-  );
-
-  const clearBulkSelection = useCallback(() => {
-    setSelectedJobIds(new Set());
-  }, []);
-
-  const runBulkJobAction = useCallback(
-    async (
-      jobIds: string[],
-      label: string,
-      action: (jobId: string) => Promise<void>,
-    ) => {
-      if (jobIds.length === 0) {
-        return;
-      }
-      let successCount = 0;
-      const failures: string[] = [];
-      for (const jobId of jobIds) {
-        try {
-          await action(jobId);
-          successCount += 1;
-        } catch (errorUnknown) {
-          const message =
-            errorUnknown instanceof Error ? errorUnknown.message : String(errorUnknown);
-          failures.push(`${jobId}: ${message}`);
-        }
-      }
-      if (successCount > 0) {
-        toast.success(`${label}: ${successCount} job(s) OK.`);
-      }
-      if (failures.length > 0) {
-        toast.error(`${failures.length} failed — ${failures.slice(0, 3).join(' · ')}`);
-      }
-      onJobsMutated();
-      setSelectedJobIds(new Set());
-    },
-    [onJobsMutated],
-  );
-
-  const handleBulkDelete = useCallback(() => {
-    const jobIds = [...selectedJobIds];
-    if (jobIds.length === 0) {
-      return;
-    }
-    setRemoveJobsDialog({ kind: 'bulk', jobIds });
-  }, [selectedJobIds]);
-
-  const confirmRemoveJobs = useCallback(async () => {
-    if (removeJobsDialog === null) {
-      return;
-    }
-    setRemoveJobsInProgress(true);
-    try {
-      if (removeJobsDialog.kind === 'bulk') {
-        await runBulkJobAction(removeJobsDialog.jobIds, 'Delete', (jobId) =>
-          removeQueueJob(queueName, jobId),
-        );
-      } else {
-        try {
-          await removeQueueJob(queueName, removeJobsDialog.jobId);
-          toast.success('Job removed.');
-          setSelectedJobIds((previous) => {
-            const next = new Set(previous);
-            next.delete(removeJobsDialog.jobId);
-            return next;
-          });
-          onJobsMutated();
-        } catch (errorUnknown) {
-          toast.error(errorUnknown instanceof Error ? errorUnknown.message : 'Remove failed.');
-        }
-      }
-    } finally {
-      setRemoveJobsInProgress(false);
-      setRemoveJobsDialog(null);
-    }
-  }, [onJobsMutated, queueName, removeJobsDialog, runBulkJobAction]);
-
-  const handleBulkRetry = useCallback(() => {
-    if (jobStatus !== 'failed') {
-      return;
-    }
-    const ids = [...selectedJobIds];
-    if (ids.length === 0) {
-      return;
-    }
-    void runBulkJobAction(ids, 'Retry', (jobId) => retryQueueJob(queueName, jobId));
-  }, [jobStatus, queueName, runBulkJobAction, selectedJobIds]);
-
-  const handleBulkPromote = useCallback(() => {
-    if (jobStatus !== 'delayed') {
-      return;
-    }
-    const ids = [...selectedJobIds];
-    if (ids.length === 0) {
-      return;
-    }
-    void runBulkJobAction(ids, 'Promote', (jobId) =>
-      Promise.resolve(onPromoteJob(queueName, jobId)),
-    );
-  }, [jobStatus, onPromoteJob, queueName, runBulkJobAction, selectedJobIds]);
-
-  const handleRemoveOne = useCallback((jobId: string) => {
-    setRemoveJobsDialog({ kind: 'single', jobId });
-  }, []);
-
-  const handleRetryOne = useCallback(
-    async (jobId: string) => {
-      try {
-        await retryQueueJob(queueName, jobId);
-        toast.success('Job scheduled for retry.');
-        onJobsMutated();
-      } catch (errorUnknown) {
-        toast.error(errorUnknown instanceof Error ? errorUnknown.message : 'Retry failed.');
-      }
-    },
-    [onJobsMutated, queueName],
-  );
-
-  return (
-    <div className={cn('flex flex-col gap-1.5', fillHeight && 'min-h-0 flex-1')}>
-      <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
-        <span>
-          {loading ? (
-            'Loading jobs…'
-          ) : (
-            <>
-              <strong className="font-mono text-foreground">{jobs.length}</strong> shown
-              {totalLoaded > 0 && (
-                <>
-                  {' '}
-                  ·{' '}
-                  <strong className="font-mono text-foreground">{totalLoaded}</strong> in slice (
-                  {pageSize}/request)
-                  {totalLoaded > 0 && (
-                    <>
-                      {' '}
-                      · Bull index{' '}
-                      <strong className="font-mono text-foreground">
-                        {pageOffset}
-                        –
-                        {pageOffset + totalLoaded - 1}
-                      </strong>
-                    </>
-                  )}
-                </>
-              )}
-              {showsFilteredHint && (
-                <span className="ml-1 text-muted-foreground">· filtered</span>
-              )}
-            </>
-          )}
-        </span>
-        <div className="flex shrink-0 items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 px-2 text-[10px]"
-                disabled={loading || !canPageBack}
-                onClick={onPageBack}
-                aria-label={`Load previous ${pageSize} jobs (lower Bull index)`}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
-                Previous {pageSize}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[14rem] leading-snug">
-              Older slice by Bull list index (previous {pageSize} jobs in this state).
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 px-2 text-[10px]"
-                disabled={loading || !canPageForward}
-                onClick={onPageForward}
-                aria-label={`Load next ${pageSize} jobs (higher Bull index)`}
-              >
-                Next {pageSize}
-                <ChevronRight className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[14rem] leading-snug">
-              Next slice by Bull list index (only enabled when the current page is full).
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-      {selectedJobIds.size > 0 && !loading ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-border bg-muted/25 px-2 py-2 text-[11px]">
-          <span className="font-medium text-foreground">
-            {selectedJobIds.size} selected
-          </span>
-          <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={clearBulkSelection}>
-            Clear
-          </Button>
-          {jobStatus === 'failed' ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-8 gap-1 px-2 text-xs"
-              onClick={() => void handleBulkRetry()}
-            >
-              <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-              Retry
-            </Button>
-          ) : null}
-          {jobStatus === 'delayed' ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-8 gap-1 px-2 text-xs"
-              onClick={() => void handleBulkPromote()}
-            >
-              <Zap className="h-3.5 w-3.5" aria-hidden />
-              Promote
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            className="h-8 gap-1 px-2 text-xs"
-            onClick={() => void handleBulkDelete()}
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            Delete
-          </Button>
-        </div>
-      ) : null}
-      <div
-        className={cn(
-          'touch-pan-x overflow-auto rounded-md border border-border [-webkit-overflow-scrolling:touch]',
-          fillHeight ? 'min-h-0 flex-1' : 'max-h-[min(520px,calc(100vh-20rem))]',
-        )}
-      >
-        <table
-          className={cn(
-            'w-full border-collapse text-[11px] sm:min-w-0',
-            showFailureColumn ? 'min-w-[58rem]' : 'min-w-[52rem]',
-          )}
-        >
-          <thead className="sticky top-0 z-[1] bg-muted/90 backdrop-blur">
-            <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-              <th className="w-9 px-1 py-2 text-center font-medium">
-                <Checkbox
-                  checked={headerCheckboxChecked}
-                  onCheckedChange={handleHeaderSelectAll}
-                  disabled={loading || jobs.length === 0}
-                  aria-label="Select all jobs on this page"
-                />
-              </th>
-              <th className="w-20 max-w-20 px-3 py-2 font-medium">ID</th>
-              <th className="px-3 py-2 font-medium">Name</th>
-              <th className="whitespace-nowrap px-3 py-2 font-medium">Created</th>
-              <th className="px-3 py-2 font-medium">Progress</th>
-              <th className="px-3 py-2 font-medium">Attempts</th>
-              <th className="px-3 py-2 font-medium">Payload</th>
-              {showFailureColumn ? (
-                <th className="min-w-[7rem] max-w-[14rem] px-3 py-2 font-medium">Error</th>
-              ) : null}
-              <th className="min-w-[10.5rem] whitespace-nowrap px-2 py-2 text-right font-medium">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td
-                  colSpan={tableColumnCount}
-                  className="px-3 py-8 text-center text-muted-foreground"
-                >
-                  Loading…
-                </td>
-              </tr>
-            )}
-            {!loading &&
-              jobs.map((job) => {
-                const rowHighlightKey = `${queueName}:${job.id}`;
-                const isHighlighted =
-                  highlightJobKey != null && highlightJobKey === rowHighlightKey;
-                return (
-                  <tr
-                  key={job.id}
-                  data-bullseye-job-row={job.id}
-                  className={cn(
-                    'cursor-pointer border-b border-border transition-colors last:border-0 hover:bg-muted/60',
-                    isHighlighted && 'bg-primary/10 ring-1 ring-inset ring-primary/25',
-                  )}
-                  onClick={() => onSelectJob(job)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      onSelectJob(job);
-                    }
-                  }}
-                  tabIndex={0}
-                  role="button"
-                >
-                  <td
-                    className="w-9 px-1 py-1 align-middle"
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => event.stopPropagation()}
-                  >
-                    <div className="flex justify-center pt-0.5">
-                      <Checkbox
-                        checked={selectedJobIds.has(job.id)}
-                        onCheckedChange={(value) => toggleJobSelected(job.id, value === true)}
-                        aria-label={`Select job ${job.id}`}
-                      />
-                    </div>
-                  </td>
-                  <td
-                    className="max-w-20 truncate px-3 py-1.5 font-mono text-[10px] tabular-nums"
-                    title={job.id}
-                  >
-                    {job.id}
-                  </td>
-                  <td className="max-w-[120px] truncate px-3 py-1.5">{job.name}</td>
-                  <td
-                    className="whitespace-nowrap px-3 py-1.5 font-mono text-[10px] text-muted-foreground"
-                    title={
-                      job.timestamp > 0 ? formatTimestampIso(job.timestamp) : undefined
-                    }
-                  >
-                    {formatTimestampPretty(job.timestamp)}
-                  </td>
-                  <td className="max-w-[80px] truncate px-3 py-1.5 font-mono text-[10px]">
-                    {formatProgressValue(job.progress)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[10px]">
-                    {job.attemptsMade}/
-                    {typeof job.opts['attempts'] === 'number' ? job.opts['attempts'] : '—'}
-                  </td>
-                  <td className="max-w-xs px-3 py-1.5 align-top text-muted-foreground">
-                    <code className="block max-w-[min(18rem,40vw)] truncate font-mono text-[10px] leading-tight">
-                      {jsonToTableCellString(job.data)}
-                    </code>
-                  </td>
-                  {showFailureColumn ? (
-                    <td className="max-w-[14rem] min-w-0 px-3 py-1.5 align-top">
-                      <p
-                        className="line-clamp-2 break-words text-left font-mono text-[10px] leading-snug text-destructive"
-                        title={
-                          [job.failedReason?.trim(), job.stacktrace?.[0]?.trim()]
-                            .filter(Boolean)
-                            .join('\n\n') || undefined
-                        }
-                      >
-                        {job.failedReason?.trim()
-                          ? job.failedReason.trim()
-                          : job.stacktrace?.[0]?.trim() || '—'}
-                      </p>
-                    </td>
-                  ) : null}
-                  <td className="px-1 py-1 align-middle text-right" onClick={(event) => event.stopPropagation()}>
-                    <div className="flex flex-wrap items-center justify-end gap-0.5">
-                      {jobStatus === 'failed' && queueName !== '' ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 shrink-0"
-                              aria-label="Retry failed job"
-                              onClick={() => void handleRetryOne(job.id)}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">Retry (re-queue failed job)</TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                      {jobStatus === 'delayed' && queueName !== '' ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 shrink-0"
-                              aria-label="Promote job to waiting"
-                              onClick={() => void onPromoteJob(queueName, job.id)}
-                            >
-                              <Zap className="h-3.5 w-3.5" aria-hidden />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">Promote to waiting (delayed → wait)</TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0"
-                            aria-label="Duplicate job"
-                            onClick={() => onDuplicateJob(job)}
-                          >
-                            <CopyPlus className="h-3.5 w-3.5" aria-hidden />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="left">Duplicate with edits…</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            aria-label="Remove job from queue"
-                            onClick={() => void handleRemoveOne(job.id)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="left">Delete job from Redis</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </td>
-                  </tr>
-                );
-              })}
-            {!loading && jobs.length === 0 && (
-              <tr>
-                <td
-                  colSpan={tableColumnCount}
-                  className="px-3 py-8 text-center text-muted-foreground"
-                >
-                  {totalLoaded === 0
-                    ? 'Empty for this state.'
-                    : 'No matches — adjust filters or switch tab.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <AlertDialog
-        open={removeJobsDialog !== null}
-        onOpenChange={(isOpen) => {
-          if (!isOpen && !removeJobsInProgress) {
-            setRemoveJobsDialog(null);
-          }
-        }}
-      >
-        <AlertDialogContent className="gap-4">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {removeJobsDialog?.kind === 'bulk'
-                ? 'Remove selected jobs?'
-                : 'Remove job from Redis?'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {removeJobsDialog?.kind === 'bulk' ? (
-                <>
-                  This permanently removes{' '}
-                  <strong className="text-foreground">{removeJobsDialog.jobIds.length}</strong> job(s)
-                  from Redis. This cannot be undone.
-                </>
-              ) : removeJobsDialog?.kind === 'single' ? (
-                <>
-                  Job{' '}
-                  <span className="font-mono text-foreground">{removeJobsDialog.jobId}</span> will be
-                  deleted from Redis. This cannot be undone.
-                </>
-              ) : null}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeJobsInProgress}>Cancel</AlertDialogCancel>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={removeJobsInProgress}
-              onClick={() => void confirmRemoveJobs()}
-            >
-              {removeJobsInProgress ? 'Removing…' : 'Remove'}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {(() => {
+        const writeQueueName =
+          jobWriteQueueName ??
+          (selectedQueue != null && selectedQueue !== ALL_QUEUES_SENTINEL
+            ? selectedQueue
+            : null);
+        return writeQueueName && jobWriteSeed ? (
+          <QueueJobWriteModal
+            open={jobWriteOpen}
+            onOpenChange={(open) => {
+              setJobWriteOpen(open);
+              if (!open) {
+                setJobWriteQueueName(null);
+              }
+            }}
+            mode={jobWriteMode}
+            queueName={writeQueueName}
+            sourceJobId={jobWriteSourceId}
+            initialJobName={jobWriteSeed.name}
+            initialData={jobWriteSeed.data}
+            initialOpts={jobWriteSeed.opts}
+            onSuccess={() => bumpJobsRefresh()}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }

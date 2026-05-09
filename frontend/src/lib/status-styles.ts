@@ -1,4 +1,4 @@
-import type { JobStatus } from '@/lib/api';
+import type { JobStatus, JobsQueryStatus } from '@/lib/api';
 
 /** Neutral tab chrome; status color comes from the dot (`JOB_STATE_STYLES.dot`). */
 export const JOB_STATE_TAB_TRIGGER_CLASSES =
@@ -22,9 +22,9 @@ export const JOB_STATE_STYLES: Record<
     cardBorder: 'border-l-foreground/25',
   },
   active: {
-    dot: 'bg-sky-500 dark:bg-sky-400',
-    countBadge: 'bg-muted text-foreground',
-    barFill: 'hsl(var(--chart-2))',
+    dot: 'bg-white ring-1 ring-border dark:bg-white dark:ring-border',
+    countBadge: 'border border-border bg-background text-foreground',
+    barFill: 'hsl(var(--foreground))',
     cardBorder: 'border-l-foreground/40',
   },
   delayed: {
@@ -34,16 +34,17 @@ export const JOB_STATE_STYLES: Record<
     cardBorder: 'border-l-foreground/32',
   },
   completed: {
-    dot: 'bg-primary',
-    countBadge: 'bg-muted text-muted-foreground',
-    barFill: 'hsl(var(--primary))',
-    cardBorder: 'border-l-primary/35',
+    dot: 'bg-emerald-600 dark:bg-emerald-500',
+    countBadge:
+      'border border-emerald-500/35 bg-emerald-500/12 text-emerald-800 dark:text-emerald-300',
+    barFill: 'hsl(142 71% 40%)',
+    cardBorder: 'border-l-emerald-500/45',
   },
   failed: {
     dot: 'bg-red-600 dark:bg-red-500',
-    countBadge: 'bg-muted text-foreground',
-    barFill: 'hsl(var(--chart-5))',
-    cardBorder: 'border-l-foreground/50',
+    countBadge: 'border border-red-500/40 bg-red-500/12 text-red-800 dark:text-red-300',
+    barFill: 'hsl(0 72% 48%)',
+    cardBorder: 'border-l-red-500/50',
   },
   paused: {
     dot: 'bg-violet-500 dark:bg-violet-400',
@@ -64,3 +65,22 @@ export const OVERVIEW_STATE_ORDER: {
   { status: 'failed', title: 'Failed' },
   { status: 'paused', title: 'Paused' },
 ];
+
+/** Queue jobs tabs: merged “All” first, then per-state tabs. */
+export const QUEUE_JOBS_TAB_ORDER: {
+  status: JobsQueryStatus;
+  title: string;
+}[] = [
+  { status: 'all', title: 'All' },
+  ...OVERVIEW_STATE_ORDER,
+];
+
+/** SVG / heatmap fills aligned with {@link JOB_STATE_STYLES} dots. */
+export const JOB_STATE_HEATMAP_FILL: Record<JobStatus, string> = {
+  waiting: 'hsl(215 16% 52%)',
+  active: 'hsl(0 0% 92%)',
+  delayed: 'hsl(38 92% 50%)',
+  completed: 'hsl(142 71% 40%)',
+  failed: 'hsl(0 72% 52%)',
+  paused: 'hsl(263 70% 55%)',
+};

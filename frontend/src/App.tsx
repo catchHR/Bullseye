@@ -1753,9 +1753,9 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {error && (
-            <div className="mb-4 shrink-0 rounded-md border border-border bg-muted px-3 py-2 text-xs">
+            <div className="mx-3 mt-3 mb-2 shrink-0 rounded-md border border-border bg-muted px-3 py-2 text-xs sm:mx-4">
               {error}
             </div>
           )}
@@ -1768,7 +1768,7 @@ export default function App() {
             )}
           >
           {nav === 'overview' && (
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
               <Tabs
                 value={overviewDashboardTab}
                 onValueChange={(value) =>
@@ -2400,7 +2400,7 @@ export default function App() {
           )}
 
           {nav === 'queues' && (
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card pb-[env(safe-area-inset-bottom)]">
               <div className="flex min-h-0 flex-1 flex-col md:flex-row">
               <div
                 className={cn(
@@ -2711,6 +2711,7 @@ export default function App() {
           )}
 
           {nav === 'schedules' && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
             <Card className="flex min-h-0 flex-1 flex-col overflow-hidden shadow-none">
               <CardHeader className="shrink-0 px-4 pb-2 pt-4 sm:px-6">
                 <CardTitle className="text-sm">Repeatable jobs</CardTitle>
@@ -2794,9 +2795,11 @@ export default function App() {
                 </div>
               </CardContent>
             </Card>
+            </div>
           )}
 
           {nav === 'log' && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
             <Card className="flex min-h-0 flex-1 flex-col overflow-hidden shadow-none">
               <CardHeader className="flex shrink-0 flex-col gap-3 px-4 pb-2 pt-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:px-6">
                 <div>
@@ -3036,10 +3039,11 @@ export default function App() {
                 })()}
               </CardContent>
             </Card>
+            </div>
           )}
 
           {nav === 'alerts' && (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
               <Suspense
                 fallback={
                   <div className="flex min-h-[12rem] flex-1 items-center justify-center text-sm text-muted-foreground">

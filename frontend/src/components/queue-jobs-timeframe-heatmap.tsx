@@ -525,6 +525,12 @@ function QueueJobsTimeframeHeatmapInner({
           yScale={yScale}
           width={innerWidth}
           height={innerHeight}
+          margin={{
+            top: MARGIN.top,
+            left: MARGIN.left,
+            right: MARGIN.right,
+            bottom: MARGIN.bottom,
+          }}
           brushRegion="chart"
           brushDirection="both"
           resizeTriggerAreas={[

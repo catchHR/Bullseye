@@ -3,9 +3,18 @@
 > **Work in progress**: This project is currently being developed primarily for internal use at our company.  
 > We’re happy if you try it out and would love to get feedback (issues, suggestions, and PRs are welcome).
 
-Embedded **web dashboard for [Bull](https://github.com/OptimalBits/bull)** (classic Bull queues) in a **NestJS** app with **Express**. Includes queue/job overviews, repeatable jobs, cross-queue logs, runtime statistics, and optional **webhook alerts**. The UI ships as **static assets** — no separate “Bull Board” service required.
+Embedded **web dashboard for [Bull](https://github.com/OptimalBits/bull)** (classic Bull queues) in a **NestJS** app with **Express**. Includes queue/job overviews, repeatable jobs, cross-queue logs, runtime statistics, optional **webhook alerts**, and an interactive **time vs. duration** chart on the jobs screen. The UI ships as **static assets** — no separate service required.
 
 > Targets: **Bull (bull + @nestjs/bull)** and **BullMQ (bullmq)**.
+
+---
+
+## Web UI highlights
+
+- **Dashboard** — Workload tiles and charts (live depth, active-job sampling, performance metrics). Content uses comfortable page inset padding.
+- **Queues & jobs** — Queue list and job table use the **full content width** (edge-to-edge under the header) for dense monitoring.
+- **Time · duration heatmap** (jobs view) — Optional collapsible chart: each job is plotted by finish/process time (X) and processing duration (Y). **Brush-drag** a rectangle to filter the table by both dimensions. **Time preset** (stored in `localStorage`) includes **“All time”** (default): the horizontal axis fits the **currently loaded job slice**; other presets are rolling windows (e.g. last hour) and calendar ranges (today, this week, etc.).
+- **Repeatable jobs**, **cross-queue job log**, and **alerts** — Same inset layout as the dashboard for readable margins.
 
 ---
 

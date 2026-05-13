@@ -405,6 +405,10 @@ export interface AlertTrigger {
   jobNames: string[];
   payloadMode: AlertPayloadMode;
   payloadBody: string;
+  /** >0 enables server-side aggregation (debounce / lookback / rate limit). */
+  aggregationDebounceMs?: number;
+  aggregationLookbackMinutes?: number;
+  aggregationMaxWebhooksPerMinute?: number;
 }
 
 export interface AlertDefinition {
@@ -417,7 +421,12 @@ export interface AlertDefinition {
   triggers: AlertTrigger[];
 }
 
-export async function fetchAlerts(): Promise<AlertDefinition[]> {
+export type AlertsListResponse = {
+  alerts: AlertDefinition[];
+  configVersion?: number;
+};
+
+export async function fetchAlerts(): Promise<AlertsListResponse> {
   const response = await fetch(`${mountBasePath()}/api/alerts`);
   if (!response.ok) {
     throw new Error('Alerts failed to load');
@@ -461,13 +470,24 @@ export async function createAlert(payload: Omit<AlertDefinition, 'id'>): Promise
 
 export async function updateAlert(
   id: string,
-  payload: Omit<AlertDefinition, 'id'>,
+  payload: Omit<AlertDefinition, 'id'> & { expectedConfigVersion?: number },
 ): Promise<AlertDefinition> {
   const response = await fetch(`${mountBasePath()}/api/alerts/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  if (response.status === 409) {
+    const errorBody = (await response.json().catch(() => ({}))) as {
+      message?: string;
+      configVersion?: number | null;
+    };
+    const err = new Error(
+      errorBody.message ?? 'Alert configuration was modified elsewhere.',
+    ) as Error & { status: 409 };
+    err.status = 409;
+    throw err;
+  }
   if (!response.ok) {
     const errorBody = (await response.json().catch(() => ({}))) as { message?: string };
     throw new Error(errorBody.message ?? 'Update alert failed');

@@ -10,7 +10,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import * as express from 'express';
 import expressBasicAuth from 'express-basic-auth';
 import { isAbsolute, join, resolve } from 'path';
-import { BullseyeAlertService } from './bullseye.alert.service';
+import { BullseyeAlertService, AlertConfigVersionConflictError } from './bullseye.alert.service';
 import { BullseyeApiService } from './bullseye.api.service';
 import {
   ALERT_TRIGGER_TYPES,
@@ -231,8 +231,8 @@ export class BullseyeSetupService implements OnModuleInit {
 
     router.get('/api/alerts', async (_req: Request, res: Response) => {
       try {
-        const list = await this.alerts.listAlerts();
-        res.json(list);
+        const doc = await this.alerts.getAlertsListResponse();
+        res.json(doc);
       } catch (error) {
         this.logger.error(error);
         res.status(500).json({ message: 'Failed to load alerts.' });
@@ -255,13 +255,26 @@ export class BullseyeSetupService implements OnModuleInit {
       try {
         const rawAlertId = req.params.id;
         const alertId = Array.isArray(rawAlertId) ? rawAlertId[0] : rawAlertId;
-        const updated = await this.alerts.updateAlert(alertId, req.body);
+        const rawBody = req.body as Record<string, unknown>;
+        const { expectedConfigVersion: ecvRaw, ...payload } = rawBody;
+        const expectedConfigVersion =
+          typeof ecvRaw === 'number' && Number.isFinite(ecvRaw) ? Math.floor(ecvRaw) : undefined;
+        const updated = await this.alerts.updateAlert(alertId, payload as Parameters<
+          BullseyeAlertService['updateAlert']
+        >[1], { expectedConfigVersion });
         if (!updated) {
           res.status(404).json({ message: 'Alert not found.' });
           return;
         }
         res.json(updated);
       } catch (error: unknown) {
+        if (error instanceof AlertConfigVersionConflictError) {
+          res.status(409).json({
+            message: 'Alert configuration was modified elsewhere.',
+            configVersion: error.configVersion ?? null,
+          });
+          return;
+        }
         const message =
           error instanceof Error ? error.message : 'Invalid alert payload.';
         this.logger.warn(message);

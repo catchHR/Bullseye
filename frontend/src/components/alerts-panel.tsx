@@ -33,6 +33,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -88,6 +89,28 @@ function normalizeStoredTrigger(trigger: AlertTrigger): AlertTrigger {
     },
   );
   return { ...trigger, payloadMode: 'javascript', payloadBody: migratedBody };
+}
+
+function setTriggerAggregationNumber(
+  trigger: AlertTrigger,
+  field: 'aggregationDebounceMs' | 'aggregationLookbackMinutes' | 'aggregationMaxWebhooksPerMinute',
+  raw: string,
+): AlertTrigger {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    const next = { ...trigger };
+    delete next[field];
+    if (field === 'aggregationDebounceMs') {
+      delete next.aggregationLookbackMinutes;
+      delete next.aggregationMaxWebhooksPerMinute;
+    }
+    return next;
+  }
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) {
+    return trigger;
+  }
+  return { ...trigger, [field]: n };
 }
 
 function AlertTriggerEditor({
@@ -197,6 +220,63 @@ function AlertTriggerEditor({
             onChange({ ...trigger, payloadBody: nextPayloadBody })
           }
         />
+      </div>
+      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-2.5">
+        <p className={cn(filterFieldLabelClass, 'normal-case tracking-normal')}>
+          Webhook aggregation (optional)
+        </p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Debounce (ms)</Label>
+            <Input
+              type="number"
+              min={0}
+              className="h-9 font-mono text-xs"
+              placeholder="Off"
+              value={trigger.aggregationDebounceMs ?? ''}
+              onChange={(e) =>
+                onChange(setTriggerAggregationNumber(trigger, 'aggregationDebounceMs', e.target.value))
+              }
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Lookback (min)</Label>
+            <Input
+              type="number"
+              min={1}
+              className="h-9 font-mono text-xs"
+              placeholder="Default: 5"
+              value={trigger.aggregationLookbackMinutes ?? ''}
+              onChange={(e) =>
+                onChange(
+                  setTriggerAggregationNumber(trigger, 'aggregationLookbackMinutes', e.target.value),
+                )
+              }
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Max webhooks / min</Label>
+            <Input
+              type="number"
+              min={1}
+              className="h-9 font-mono text-xs"
+              placeholder="Default: 10"
+              value={trigger.aggregationMaxWebhooksPerMinute ?? ''}
+              onChange={(e) =>
+                onChange(
+                  setTriggerAggregationNumber(
+                    trigger,
+                    'aggregationMaxWebhooksPerMinute',
+                    e.target.value,
+                  ),
+                )
+              }
+            />
+          </div>
+        </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Set debounce to bundle events in Redis; leave empty for one webhook per event (legacy).
+        </p>
       </div>
     </div>
   );
@@ -362,6 +442,8 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
   const queueNames = useMemo(() => queues.map((queue) => queue.name).sort(), [queues]);
 
   const [alerts, setAlerts] = useState<AlertDefinition[]>([]);
+  const [alertsDocumentVersion, setAlertsDocumentVersion] = useState<number | undefined>();
+  const editBaseConfigVersionRef = useRef<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [panelError, setPanelError] = useState<string | null>(null);
 
@@ -382,7 +464,8 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
     setLoading(true);
     try {
       const data = await fetchAlerts();
-      setAlerts(data);
+      setAlerts(data.alerts);
+      setAlertsDocumentVersion(data.configVersion);
       setPanelError(null);
     } catch (errorUnknown) {
       const message =
@@ -439,6 +522,7 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
   }
 
   function beginEdit(alertItem: AlertDefinition) {
+    editBaseConfigVersionRef.current = alertsDocumentVersion;
     setEditorMode(alertItem.id);
     setDraftName(alertItem.name);
     setDraftEnabled(alertItem.enabled);
@@ -506,7 +590,7 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
       }
     }
 
-    const payload: Omit<AlertDefinition, 'id'> = {
+    const payload: Omit<AlertDefinition, 'id'> & { expectedConfigVersion?: number } = {
       name: trimmedName,
       enabled: draftEnabled,
       webhookUrl: trimmedWebhook,
@@ -517,6 +601,9 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
         payloadMode: 'javascript',
       })),
     };
+    if (editingId !== 'new' && editBaseConfigVersionRef.current !== undefined) {
+      payload.expectedConfigVersion = editBaseConfigVersionRef.current;
+    }
 
     try {
       setPanelError(null);
@@ -530,6 +617,16 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
       resetDraftForCreate();
       toast.success(editingId === 'new' ? 'Alert created.' : 'Alert saved.');
     } catch (errorUnknown) {
+      if (
+        errorUnknown &&
+        typeof errorUnknown === 'object' &&
+        'status' in errorUnknown &&
+        (errorUnknown as { status?: number }).status === 409
+      ) {
+        toast.error('Alert configuration changed elsewhere. Reloading list.');
+        await loadAlerts();
+        return;
+      }
       const message =
         errorUnknown instanceof Error ? errorUnknown.message : 'Save failed';
       setPanelError(message);
@@ -556,13 +653,28 @@ export function AlertsPanel({ queues }: { queues: QueueSummary[] }) {
 
   async function toggleEnabled(alertItem: AlertDefinition, enabled: boolean) {
     try {
+      const { id: _id, ...rest } = alertItem;
+      void _id;
       await updateAlert(alertItem.id, {
-        ...alertItem,
+        ...rest,
         enabled,
+        ...(alertsDocumentVersion !== undefined
+          ? { expectedConfigVersion: alertsDocumentVersion }
+          : {}),
       });
       await loadAlerts();
       toast.success(enabled ? 'Alert enabled.' : 'Alert disabled.');
     } catch (errorUnknown) {
+      if (
+        errorUnknown &&
+        typeof errorUnknown === 'object' &&
+        'status' in errorUnknown &&
+        (errorUnknown as { status?: number }).status === 409
+      ) {
+        toast.error('Alert configuration changed elsewhere. Reloading list.');
+        await loadAlerts();
+        return;
+      }
       const message =
         errorUnknown instanceof Error ? errorUnknown.message : 'Update failed';
       setPanelError(message);

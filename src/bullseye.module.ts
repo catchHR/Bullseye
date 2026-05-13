@@ -1,4 +1,5 @@
 import { DynamicModule, Module, type InjectionToken } from '@nestjs/common';
+import { BullseyeAlertFlushWorker } from './bullseye.alert.flush.worker';
 import { BullseyeAlertListenerService } from './bullseye.alert-listener.service';
 import { BullseyeAlertService } from './bullseye.alert.service';
 import { BullseyeApiService } from './bullseye.api.service';
@@ -26,6 +27,7 @@ export class BullseyeModule {
         },
         BullseyeApiService,
         BullseyeAlertService,
+        BullseyeAlertFlushWorker,
         BullseyeAlertListenerService,
         BullseyeSetupService,
       ],
@@ -60,6 +62,7 @@ export class BullseyeModule {
         },
         BullseyeApiService,
         BullseyeAlertService,
+        BullseyeAlertFlushWorker,
         BullseyeAlertListenerService,
         BullseyeSetupService,
       ],

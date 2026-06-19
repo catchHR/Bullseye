@@ -228,6 +228,7 @@ export function JobDetailDrawer({
   const optionsTabEmpty = isOptsVisuallyEmpty(job.opts);
   const errorsTabEmpty = !hasErrorContent(job);
   const logsTabEmpty = logLines.length === 0;
+  const logsTabLoading = loading && logsTabEmpty;
 
   return (
     <Dialog open={open} modal={false} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
@@ -463,7 +464,9 @@ export function JobDetailDrawer({
                   value="logs"
                   className="mt-0 min-w-0 max-w-full outline-none focus-visible:ring-0"
                 >
-                  {logsTabEmpty ? (
+                  {logsTabLoading ? (
+                    <p className="py-10 text-center text-xs text-muted-foreground">Loading log lines…</p>
+                  ) : logsTabEmpty ? (
                     <TabEmptyState
                       icon={ScrollText}
                       title="No queue log lines"

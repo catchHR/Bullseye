@@ -437,14 +437,14 @@ export class BullMqDriver implements QueueDriver {
     }
     const dto = this.mapJobToDto(job);
     try {
-      const logBundle = await (job as any).getLogs?.(0, 499);
-      const logs = Array.isArray(logBundle?.logs) ? logBundle.logs : [];
+      const logBundle = await queue.getJobLogs(jobId, 0, 499);
+      const logs = Array.isArray(logBundle.logs) ? logBundle.logs : [];
       const logCount =
-        typeof logBundle?.count === 'number' ? logBundle.count : logs.length;
+        typeof logBundle.count === 'number' ? logBundle.count : logs.length;
       return { ...dto, logs, logCount };
     } catch (error) {
       this.logger.warn(
-        `getLogs failed for queue "${queueName}" job ${jobId}: ${
+        `getJobLogs failed for queue "${queueName}" job ${jobId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

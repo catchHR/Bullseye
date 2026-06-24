@@ -1,6 +1,6 @@
 {
   "name": "@catchhr/nestjs-bullseye",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Embedded Bull queue dashboard (SPA + REST) for NestJS with Express",
   "license": "MIT",
   "author": "",

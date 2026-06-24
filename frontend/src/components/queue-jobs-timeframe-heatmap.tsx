@@ -531,6 +531,7 @@ function QueueJobsTimeframeHeatmapInner({
             right: MARGIN.right,
             bottom: MARGIN.bottom,
           }}
+          useWindowMoveEvents
           brushRegion="chart"
           brushDirection="both"
           resizeTriggerAreas={[

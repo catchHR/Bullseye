@@ -53,15 +53,16 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@nestjs/bull": "^11.0.0",
-    "@nestjs/common": "^11.0.0",
-    "@nestjs/core": "^11.0.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.0.0",
-    "bull": "^4.16.0",
-    "bullmq": "^5.0.0",
-    "ioredis": "^5.0.0",
-    "typescript": "~5.9.3"
+    "@nestjs/bull": "^11.0.4",
+    "@nestjs/common": "^11.1.19",
+    "@nestjs/core": "^11.1.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.7.0",
+    "bull": "^4.16.5",
+    "bullmq": "^5.76.8",
+    "express": "^5.2.1",
+    "ioredis": "^5.10.1",
+    "typescript": "~6.0.3"
   },
   "engines": {
     "node": ">=20"

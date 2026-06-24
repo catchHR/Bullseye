@@ -63,10 +63,15 @@ export interface BullseyeModuleOptions {
   } | null;
   middleware?: BullseyeExpressMiddleware | null;
   /**
-   * Persistence file for configured webhook alerts (JSON).
-   * Default: `.bullseye-alerts.json` in the process working directory.
+   * Legacy migration only: read `.bullseye-alerts.json` once when Redis has no config.
+   * Source of truth for alert definitions is Redis.
    */
   alertsStoragePath?: string;
+  /**
+   * Separates Bullseye alert keys in a shared Redis DB.
+   * Default: slug derived from {@link basePath}.
+   */
+  alertsInstanceId?: string;
   /**
    * Operator info for the SPA sidebar (exposed via `GET …/api/ui-config`).
    * Omit to use built-in defaults (`Bullseye` / `operator@local`, no avatar).
@@ -101,6 +106,10 @@ export interface AlertTriggerDto {
    * javascript: expression using `ctx`; result is sent as JSON (objects → JSON.stringify).
    */
   payloadBody: string;
+  /** >0 enables Redis aggregation (debounce / lookback / rate limit) for this trigger. */
+  aggregationDebounceMs?: number;
+  aggregationLookbackMinutes?: number;
+  aggregationMaxWebhooksPerMinute?: number;
 }
 
 export interface AlertDefinitionDto {
@@ -117,6 +126,8 @@ export interface AlertDefinitionDto {
 export interface AlertsFileV1 {
   v: 1;
   alerts: AlertDefinitionDto[];
+  /** Monotonic optimistic-lock counter for PUT / POST updates. */
+  configVersion?: number;
 }
 
 /** Context passed into template / JavaScript payload builders (webhook body). */
@@ -135,6 +146,20 @@ export interface AlertDispatchContext {
     finishedOn: number | null;
   } | null;
   error: { message: string; stack?: string } | null;
+  aggregation?: {
+    summary: {
+      count: number;
+      firstReceivedAt: number;
+      lastReceivedAt: number;
+    };
+    events: Array<{
+      receivedAt: number;
+      trigger: AlertTriggerType;
+      queueName: string;
+      job: AlertDispatchContext['job'];
+      error: AlertDispatchContext['error'];
+    }>;
+  };
 }
 
 export type JobStatusFilter =

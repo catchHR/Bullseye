@@ -4,6 +4,7 @@ import { ModulesContainer } from '@nestjs/core';
 import Bull = require('bull');
 import IORedis, { type RedisOptions } from 'ioredis';
 import { BullMqDriver } from './drivers/bullmq.driver';
+import { createBullseyeScanRedisClient } from './bullseye.redis-client';
 
 /** Bull `Job.DEFAULT_JOB_NAME` when `name` is omitted in `queue.add`. */
 const BULL_DEFAULT_JOB_NAME = '__default__';
@@ -46,13 +47,7 @@ export class BullseyeApiService implements OnModuleDestroy {
    * `{bullKeyPrefix}:queue:…` in Redis. SCAN must use the real prefix without that option.
    */
   private createRedisClient(): IORedis {
-    const redis = this.options.redis;
-    if (typeof redis === 'string') {
-      return new IORedis(redis);
-    }
-    const opts = {...(redis as RedisOptions)};
-    delete opts.keyPrefix;
-    return new IORedis(opts);
+    return createBullseyeScanRedisClient(this.options);
   }
 
   async getRedisMetrics(): Promise<{

@@ -9,6 +9,16 @@ export type BullseyeExpressMiddleware = (
   next: NextFunction,
 ) => void;
 
+/** Streamable HTTP MCP endpoint (Cursor, Claude Desktop, etc.). */
+export interface BullseyeMcpOptions {
+  /** Path segment under `basePath` (default: `/mcp`). */
+  path?: string;
+  /** Bearer token: `Authorization: Bearer <apiKey>`. */
+  apiKey: string;
+  /** Default `true` — read-only tools only. Set `false` to enable write tools (phase 2). */
+  readOnly?: boolean;
+}
+
 /** Sidebar account block in the Bullseye SPA (name, email, optional avatar). */
 export interface BullseyeOperatorProfile {
   displayName: string;
@@ -62,6 +72,8 @@ export interface BullseyeModuleOptions {
    * Omit to use built-in defaults (`Bullseye` / `operator@local`, no avatar).
    */
   operator?: BullseyeOperatorProfile | null;
+  /** When set, exposes a Streamable HTTP MCP endpoint under `${basePath}${mcp.path}`. */
+  mcp?: BullseyeMcpOptions | null;
 }
 
 /** Bullseye — webhook alerts */

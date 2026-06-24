@@ -106,8 +106,44 @@ BullseyeModule.forRootAsync({
 | `middleware` | Express middleware \| `null` | Runs after Basic auth (e.g. additional checks). |
 | `alertsStoragePath` | `string?` | JSON file for alerts (default: `.bullseye-alerts.json` in `process.cwd()`). |
 | `operator` | `BullseyeOperatorProfile \| null` | Optional sidebar profile (name/contact/avatar); returned via `GET …/api/ui-config`. |
+| `mcp` | `BullseyeMcpOptions \| null` | Optional embedded MCP server (Streamable HTTP) for AI clients — see below. |
 
 Exported token: **`BULLSEYE_OPTIONS`**.
+
+### MCP (Cursor, Claude Desktop, …)
+
+When `mcp` is set, Bullseye exposes a **Streamable HTTP** MCP endpoint at `${basePath}${mcp.path}` (default `${basePath}/mcp`). It uses **Bearer token** auth (`Authorization: Bearer <apiKey>`) and is mounted **outside** HTTP Basic auth so programmatic clients do not need dashboard credentials.
+
+```typescript
+BullseyeModule.forRoot({
+  basePath: '/queue-dashboard',
+  redis: { host: 'localhost', port: 6379 },
+  mcp: {
+    path: '/mcp',
+    apiKey: process.env.BULLSEYE_MCP_API_KEY!,
+    readOnly: true, // default — write tools when false (future)
+  },
+}),
+```
+
+**Cursor** (`.cursor/mcp.json` in your app or `~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "bullseye": {
+      "url": "http://localhost:3000/queue-dashboard/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:BULLSEYE_MCP_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Read-only tools: `list_queues`, `list_jobs`, `get_job`, `get_job_log`, `get_runtime_stats`, `list_repeatable_jobs`, `get_redis_metrics`.
+
+Do **not** expose the MCP endpoint publicly. Use a long random `apiKey`, VPN/firewall, and the same network posture as the dashboard.
 
 Queues can be detected via Nest DI (Bull classic) and/or via Redis key scanning (`{prefix}:*:meta`).
 
@@ -116,6 +152,8 @@ Queues can be detected via Nest DI (Bull classic) and/or via Redis key scanning 
 ## Security
 
 Do **not** expose this dashboard publicly without protection. Use `basicAuth`, custom `middleware`, and network controls (VPN / firewall).
+
+If MCP is enabled, protect `${basePath}/mcp` with a strong `mcp.apiKey` and the same network controls — it is not covered by `basicAuth`.
 
 ### Alerts / webhooks
 

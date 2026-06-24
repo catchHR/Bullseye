@@ -6,6 +6,7 @@ export type {
   AlertTriggerDto,
   AlertTriggerType,
   BullseyeExpressMiddleware,
+  BullseyeMcpOptions,
   BullseyeModuleOptions,
   BullseyeOperatorProfile,
   JobListItemDto,

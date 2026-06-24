@@ -1,6 +1,6 @@
 {
   "name": "@catchhr/nestjs-bullseye",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Embedded Bull queue dashboard (SPA + REST) for NestJS with Express",
   "license": "MIT",
   "author": "",
@@ -40,11 +40,17 @@
     "ioredis": "^5.0.0"
   },
   "peerDependenciesMeta": {
-    "bull": { "optional": true },
-    "bullmq": { "optional": true }
+    "bull": {
+      "optional": true
+    },
+    "bullmq": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "express-basic-auth": "^1.2.1"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express-basic-auth": "^1.2.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@nestjs/bull": "^11.0.0",

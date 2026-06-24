@@ -32,6 +32,16 @@ Production builds write to `../public/`.
 
 ---
 
+## MCP (manual test)
+
+1. Enable MCP in your host app's `BullseyeModule.forRoot({ …, mcp: { apiKey: '…' } })`.
+2. `npm run build:lib` and start the Nest app.
+3. Add a Cursor MCP entry pointing at `http://localhost:<port><basePath>/mcp` with `Authorization: Bearer <apiKey>`.
+4. In Cursor → Tools, verify tools list and run `list_queues` / `get_job` on a failed job.
+5. Confirm `401` without Bearer header and that the SPA under `basePath` still works.
+
+---
+
 ## Publish
 
 ```bash

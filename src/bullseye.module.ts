@@ -3,6 +3,7 @@ import { BullseyeAlertListenerService } from './bullseye.alert-listener.service'
 import { BullseyeAlertService } from './bullseye.alert.service';
 import { BullseyeApiService } from './bullseye.api.service';
 import { BullseyeSetupService } from './bullseye.setup';
+import { BullseyeMcpService } from './mcp/bullseye.mcp.service';
 import {
   BULLSEYE_OPTIONS,
   BullseyeModuleOptions,
@@ -28,6 +29,7 @@ export class BullseyeModule {
         BullseyeAlertService,
         BullseyeAlertListenerService,
         BullseyeSetupService,
+        BullseyeMcpService,
       ],
       exports: [BullseyeApiService],
     };
@@ -62,6 +64,7 @@ export class BullseyeModule {
         BullseyeAlertService,
         BullseyeAlertListenerService,
         BullseyeSetupService,
+        BullseyeMcpService,
       ],
       exports: [BullseyeApiService],
     };

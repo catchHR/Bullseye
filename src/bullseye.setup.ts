@@ -36,6 +36,12 @@ export class BullseyeSetupService implements OnModuleInit {
     const httpAdapter = this.httpAdapterHost.httpAdapter;
     const expressApp = httpAdapter.getInstance() as Express;
     const base = this.normalizeBasePath(this.options.basePath);
+    const mcpPath = this.options.mcp
+      ? this.normalizeMcpPath(this.options.mcp.path ?? '/mcp')
+      : null;
+    const isMcpRequest = (req: Request): boolean =>
+      mcpPath !== null &&
+      (req.path === mcpPath || req.path.startsWith(`${mcpPath}/`));
 
     const publicPath = join(__dirname, '..', 'public');
     const router = express.Router();
@@ -535,13 +541,20 @@ export class BullseyeSetupService implements OnModuleInit {
     const basicUsername = this.options.basicAuth?.username?.trim() ?? '';
     const basicPassword = this.options.basicAuth?.password ?? '';
     if (basicUsername !== '' && basicPassword !== '') {
+      const basicAuth = expressBasicAuth({
+        users: {
+          [basicUsername]: basicPassword,
+        },
+        challenge: true,
+      });
       stack.push(
-        expressBasicAuth({
-          users: {
-            [basicUsername]: basicPassword,
-          },
-          challenge: true,
-        }),
+        (req: Request, res: Response, next: NextFunction) => {
+          if (isMcpRequest(req)) {
+            next();
+            return;
+          }
+          basicAuth(req, res, next);
+        },
       );
       this.logger.log('Bullseye: HTTP Basic Auth is enabled for this mount.');
     }
@@ -555,6 +568,10 @@ export class BullseyeSetupService implements OnModuleInit {
       }),
     );
     stack.push((req: Request, res: Response, next: NextFunction) => {
+      if (isMcpRequest(req)) {
+        next();
+        return;
+      }
       if (req.method !== 'GET') {
         next();
         return;
@@ -572,5 +589,13 @@ export class BullseyeSetupService implements OnModuleInit {
 
   private normalizeBasePath(basePath: string): string {
     return basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
+  }
+
+  private normalizeMcpPath(path: string): string {
+    const trimmed = path.trim();
+    if (trimmed === '' || trimmed === '/') {
+      return '/mcp';
+    }
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   }
 }

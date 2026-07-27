@@ -498,6 +498,7 @@ export class BullseyeApiService implements OnModuleDestroy {
 
   /**
    * Newest jobs across all Bull states for one queue (each row has `state`).
+   * Pulls the top `(end + 1)` from each state so the merged page slice is exact.
    */
   async getJobsMergedAllStatuses(
     queueName: string,
@@ -513,15 +514,17 @@ export class BullseyeApiService implements OnModuleDestroy {
       'failed',
       'paused',
     ];
-    const need = end - start + 1;
-    const pullPer = Math.min(220, Math.max(need, Math.ceil(need * 1.2)));
-    const merged: JobListItemDto[] = [];
-    for (const st of statuses) {
-      const chunk = await this.getJobs(queueName, st, 0, pullPer - 1);
-      for (const j of chunk) {
-        merged.push({ ...j, state: st });
-      }
+    const pullCount = Math.max(0, end + 1);
+    if (pullCount === 0) {
+      return [];
     }
+    const chunks = await Promise.all(
+      statuses.map(async (st) => {
+        const jobs = await this.getJobs(queueName, st, 0, pullCount - 1);
+        return jobs.map((j) => ({ ...j, state: st }));
+      }),
+    );
+    const merged = chunks.flat();
     merged.sort((a, b) => this.jobListSortKey(b) - this.jobListSortKey(a));
     return merged.slice(start, end + 1);
   }
@@ -529,6 +532,10 @@ export class BullseyeApiService implements OnModuleDestroy {
   /**
    * Merged jobs across every known queue (`queueName` on each row).
    * When `status === 'all'`, merges all six Bull states per queue (each row has `state`).
+   *
+   * Loads the top `(end + 1)` jobs from each source list, then merge-sorts and
+   * slices `[start, end]` — same page semantics as a single-queue `getJobs`
+   * (up to the client page size, typically 500), without per-queue sample caps.
    */
   async getJobsCrossQueue(
     status: JobStatusFilter,
@@ -536,8 +543,12 @@ export class BullseyeApiService implements OnModuleDestroy {
     end: number,
   ): Promise<JobListItemDto[]> {
     const names = await this.listQueueNames();
-    const need = end - start + 1;
-    const merged: JobListItemDto[] = [];
+    const pullCount = Math.max(0, end + 1);
+    if (pullCount === 0 || names.length === 0) {
+      return [];
+    }
+
+    let merged: JobListItemDto[];
     if (status === 'all') {
       const statuses: SingleQueueJobStatus[] = [
         'waiting',
@@ -547,36 +558,25 @@ export class BullseyeApiService implements OnModuleDestroy {
         'failed',
         'paused',
       ];
-      const pullPer = Math.min(
-        90,
-        Math.max(
-          12,
-          Math.floor(520 / Math.max(1, names.length * statuses.length)),
+      const chunks = await Promise.all(
+        names.flatMap((q) =>
+          statuses.map(async (st) => {
+            const jobs = await this.getJobs(q, st, 0, pullCount - 1);
+            return jobs.map((j) => ({ ...j, state: st, queueName: q }));
+          }),
         ),
       );
-      for (const q of names) {
-        for (const st of statuses) {
-          const chunk = await this.getJobs(q, st, 0, pullPer - 1);
-          for (const j of chunk) {
-            merged.push({ ...j, state: st, queueName: q });
-          }
-        }
-      }
+      merged = chunks.flat();
     } else {
-      const pullPerQueue = Math.min(
-        220,
-        Math.max(
-          Math.ceil(need / Math.max(1, names.length)),
-          Math.min(need, 72),
-        ),
+      const chunks = await Promise.all(
+        names.map(async (q) => {
+          const jobs = await this.getJobs(q, status, 0, pullCount - 1);
+          return jobs.map((j) => ({ ...j, state: status, queueName: q }));
+        }),
       );
-      for (const q of names) {
-        const chunk = await this.getJobs(q, status, 0, pullPerQueue - 1);
-        for (const j of chunk) {
-          merged.push({ ...j, state: status, queueName: q });
-        }
-      }
+      merged = chunks.flat();
     }
+
     merged.sort((a, b) => this.jobListSortKey(b) - this.jobListSortKey(a));
     const seen = new Set<string>();
     const deduped: JobListItemDto[] = [];

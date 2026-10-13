@@ -284,8 +284,9 @@ Issues and PRs are welcome on [GitHub](https://github.com/catchHR/Bullseye). Ple
 
 1. Open an [issue](https://github.com/catchHR/Bullseye/issues) for larger changes
 2. Keep diffs focused (library *or* SPA unless they must ship together)
-3. Run `npm run build` before opening a PR
-4. Document user-facing changes in `CHANGELOG.md`
+3. Use [Conventional Commits](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13) (see `DEVELOPMENT.md` / `AGENTS.md`)
+4. Run `npm run build` before opening a PR
+5. Document user-facing changes in `CHANGELOG.md`
 
 ---
 

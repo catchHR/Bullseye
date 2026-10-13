@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Contributor / agent guidance for [Conventional Commits](https://www.conventionalcommits.org/) ([cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)) in `AGENTS.md` and `DEVELOPMENT.md`.
+
 ## [0.2.0] — 2026-10-13
 
 Open-source readiness release: NestJS 12 + BullMQ 6 compatibility, lazy backend loading, and documentation overhaul.

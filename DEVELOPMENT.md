@@ -59,6 +59,20 @@ See [`docs/screenshots/README.md`](./docs/screenshots/README.md) for the labeled
 
 ---
 
+## Commit messages
+
+This repo uses **[Conventional Commits](https://www.conventionalcommits.org/)** following [qoomon’s cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13). Agents must follow the same rules in [`AGENTS.md`](./AGENTS.md) (types, description style, `!` / `BREAKING CHANGE` for breaks).
+
+```text
+<type>(<optional scope>): <description>
+```
+
+Common types: `feat`, `fix`, `refactor`, `perf`, `style`, `test`, `docs`, `build`, `ops`, `chore`. Prefer short scopes such as `api`, `ui`, `drivers`, `alerts`, `mcp`, or `docs` when useful.
+
+Examples: `feat(ui): add command palette`, `fix(drivers): handle missing paused counts`, `docs: clarify MCP auth`.
+
+---
+
 ## Publish
 
 ```bash
@@ -66,6 +80,8 @@ npm publish --access public
 ```
 
 Before publishing, check `package.json` `name`, `version`, and repository URLs ([catchHR/Bullseye](https://github.com/catchHR/Bullseye)).
+
+Release version bumps should align with Conventional Commits / SemVer: breaking changes → major, `feat` → minor, otherwise patch — and move `[Unreleased]` entries in `CHANGELOG.md` into a dated version section.
 
 ---
 

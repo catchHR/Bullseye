@@ -100,8 +100,58 @@ When cutting a release: move `[Unreleased]` entries into a dated version section
 ### Commits & PRs
 
 - Only commit when explicitly asked
+- **Always** follow [Conventional Commits](https://www.conventionalcommits.org/) as summarized in [qoomon’s cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13) (see below)
 - Do not force-push main/master; do not skip hooks unless requested
 - PR descriptions should mention user-facing impact and point at changelog entries when relevant
+
+### Commit message convention (required)
+
+Format:
+
+```text
+<type>(<optional scope>): <description>
+
+<optional body>
+
+<optional footer>
+```
+
+**Types**
+
+| Type | Use for |
+|------|---------|
+| `feat` | Add, adjust, or remove a feature in the API or UI |
+| `fix` | Fix an API or UI bug from a prior `feat` |
+| `refactor` | Restructure code without changing API/UI behavior |
+| `perf` | Performance-focused refactor |
+| `style` | Formatting / style only (no behavior change) |
+| `test` | Add or correct tests |
+| `docs` | Documentation only |
+| `build` | Build tooling, dependencies, project version |
+| `ops` | CI/CD, infra, deployment, monitoring |
+| `chore` | Misc maintenance (e.g. `.gitignore`, init) |
+
+**Rules**
+
+- Description: imperative present tense (“add” / “fix”, not “added” / “fixes”); **no** leading capital; **no** trailing period
+- Scope is optional; use a short area when helpful (`api`, `ui`, `drivers`, `alerts`, `mcp`, `docs`, …). **Do not** use issue IDs as scopes
+- Breaking changes: put `!` before `:` (e.g. `feat(api)!: remove status endpoint`) and document in the footer with `BREAKING CHANGE: …`
+- Merge / revert commits may keep Git’s default messages
+- SemVer hint for releases: breaking → major; `feat` → minor; otherwise → patch (changelog + `package.json` still updated explicitly when releasing)
+
+**Examples**
+
+```text
+feat(ui): add command palette for queue actions
+
+fix(drivers): handle BullMQ 6 missing paused job type
+
+docs: document conventional commit messages
+
+feat(api)!: drop legacy repeatable jobs listing
+
+BREAKING CHANGE: schedules use getJobSchedulers only on BullMQ 6+
+```
 
 ---
 

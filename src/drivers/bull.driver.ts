@@ -1,7 +1,5 @@
 import { Inject, Logger } from '@nestjs/common';
 import { ModulesContainer } from '@nestjs/core';
-/** CJS export has no `default` — default import can break at runtime. */
-import Bull = require('bull');
 import IORedis, { type RedisOptions } from 'ioredis';
 import {
   BULLSEYE_OPTIONS,
@@ -25,13 +23,22 @@ import type {
 /** Bull `Job.DEFAULT_JOB_NAME` when `name` is omitted in `queue.add`. */
 const BULL_DEFAULT_JOB_NAME = '__default__';
 
+type BullLib = typeof import('bull');
+type BullQueue = import('bull').Queue;
+type BullJob = import('bull').Job;
+type BullJobStatus = import('bull').JobStatus;
+type BullJobCounts = import('bull').JobCounts;
+type BullJobOptions = import('bull').JobOptions;
+
 export class BullDriver implements QueueDriver {
   readonly backend = 'bull' as const;
 
   private readonly logger = new Logger(BullDriver.name);
   private readonly scanRedis: IORedis;
-  private readonly queueCache = new Map<string, Bull.Queue>();
-  private readonly eventQueueCache = new Map<string, Bull.Queue>();
+  private readonly queueCache = new Map<string, BullQueue>();
+  private readonly eventQueueCache = new Map<string, BullQueue>();
+  /** Lazily loaded so importing this module does not require `bull` at process start. */
+  private bullLib: BullLib | null = null;
 
   /** Matches `@nestjs/bull-shared` / `getQueueToken`: `BullQueue_<name>` */
   private static readonly BULL_QUEUE_TOKEN_PREFIX = 'BullQueue_';
@@ -42,6 +49,15 @@ export class BullDriver implements QueueDriver {
     private readonly modulesContainer: ModulesContainer,
   ) {
     this.scanRedis = this.createRedisClient();
+  }
+
+  private getBullLib(): BullLib {
+    if (!this.bullLib) {
+      // CJS export has no `default` — default import can break at runtime.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      this.bullLib = require('bull') as BullLib;
+    }
+    return this.bullLib;
   }
 
   /**
@@ -84,13 +100,13 @@ export class BullDriver implements QueueDriver {
     const queue = this.getQueue(queueName, true);
     await queue.isReady();
 
-    queue.on('failed', (job: Bull.Job, error: Error) => {
+    queue.on('failed', (job: BullJob, error: Error) => {
       handler({ type: 'job_failed', queueName, jobId: String(job.id), error });
     });
-    queue.on('stalled', (job: Bull.Job) => {
+    queue.on('stalled', (job: BullJob) => {
       handler({ type: 'job_stalled', queueName, jobId: String(job.id) });
     });
-    queue.on('completed', (job: Bull.Job) => {
+    queue.on('completed', (job: BullJob) => {
       handler({ type: 'job_completed', queueName, jobId: String(job.id) });
     });
     queue.on('error', (error: Error) => {
@@ -110,12 +126,13 @@ export class BullDriver implements QueueDriver {
     await queue.close().catch(() => undefined);
   }
 
-  private getQueue(name: string, forEvents = false): Bull.Queue {
+  private getQueue(name: string, forEvents = false): BullQueue {
     const cache = forEvents ? this.eventQueueCache : this.queueCache;
     const existing = cache.get(name);
     if (existing) {
       return existing;
     }
+    const Bull = this.getBullLib();
     const queue = new Bull(name, {
       redis: this.options.redis,
       prefix: this.options.prefix,
@@ -301,7 +318,7 @@ export class BullDriver implements QueueDriver {
       const queue = this.getQueue(name);
       await queue.isReady();
       const raw = await queue.getJobCounts();
-      const rawWithPaused = raw as Bull.JobCounts & { paused?: number };
+      const rawWithPaused = raw as BullJobCounts & { paused?: number };
       const isPaused = await queue.isPaused();
       results.push({
         name,
@@ -354,7 +371,7 @@ export class BullDriver implements QueueDriver {
     await queue.empty();
   }
 
-  private mapJobToDto(job: Bull.Job): JobListItemDto {
+  private mapJobToDto(job: BullJob): JobListItemDto {
     const json = job.toJSON();
     const rawOpts = json.opts;
     const opts: Record<string, unknown> =
@@ -381,8 +398,8 @@ export class BullDriver implements QueueDriver {
     return status !== 'completed' && status !== 'failed';
   }
 
-  private bullTypesForStatus(status: SingleQueueJobStatus): Bull.JobStatus[] {
-    const map: Record<SingleQueueJobStatus, Bull.JobStatus[]> = {
+  private bullTypesForStatus(status: SingleQueueJobStatus): BullJobStatus[] {
+    const map: Record<SingleQueueJobStatus, BullJobStatus[]> = {
       waiting: ['waiting'],
       paused: ['paused'],
       active: ['active'],
@@ -405,7 +422,7 @@ export class BullDriver implements QueueDriver {
     const ascending = this.jobListAscending(status);
     const jobs = await queue.getJobs(types, start, end, ascending);
     const filtered = jobs.filter((job) => job != null);
-    return filtered.map((job) => this.mapJobToDto(job as Bull.Job));
+    return filtered.map((job) => this.mapJobToDto(job as BullJob));
   }
 
   async getJobById(queueName: string, jobId: string): Promise<JobListItemDto | null> {
@@ -415,7 +432,7 @@ export class BullDriver implements QueueDriver {
     if (!job) {
       return null;
     }
-    const dto = this.mapJobToDto(job as Bull.Job);
+    const dto = this.mapJobToDto(job as BullJob);
     try {
       const logBundle = (await queue.getJobLogs(jobId, 0, 499)) as {
         logs: string[];
@@ -449,7 +466,7 @@ export class BullDriver implements QueueDriver {
     if (state !== 'delayed') {
       throw new Error(`JOB_NOT_DELAYED:${state}`);
     }
-    await (job as Bull.Job).promote();
+    await (job as BullJob).promote();
   }
 
   /**
@@ -462,7 +479,7 @@ export class BullDriver implements QueueDriver {
     if (!job) {
       throw new Error('JOB_NOT_FOUND');
     }
-    await (job as Bull.Job).remove();
+    await (job as BullJob).remove();
   }
 
   /**
@@ -479,7 +496,7 @@ export class BullDriver implements QueueDriver {
     if (state !== 'failed') {
       throw new Error(`JOB_NOT_FAILED:${state}`);
     }
-    await (job as Bull.Job).retry();
+    await (job as BullJob).retry();
   }
 
   /**
@@ -503,7 +520,7 @@ export class BullDriver implements QueueDriver {
         throw new Error('INVALID_DATA_JSON');
       }
     }
-    let opts: Bull.JobOptions = {};
+    let opts: BullJobOptions = {};
     if (payload.opts !== undefined && payload.opts !== null) {
       let rawOpts: unknown = payload.opts;
       if (typeof rawOpts === 'string') {
@@ -580,7 +597,7 @@ export class BullDriver implements QueueDriver {
     } else {
       mergedOpts = this.cloneOptsForDuplicate(baseOpts);
     }
-    const added = await queue.add(name, data as object, mergedOpts as Bull.JobOptions);
+    const added = await queue.add(name, data as object, mergedOpts as BullJobOptions);
     return { id: String(added.id) };
   }
 
@@ -591,8 +608,8 @@ export class BullDriver implements QueueDriver {
     return next;
   }
 
-  private cloneOptsForAdd(opts: Record<string, unknown>): Bull.JobOptions {
-    return this.cloneOptsForDuplicate(opts) as Bull.JobOptions;
+  private cloneOptsForAdd(opts: Record<string, unknown>): BullJobOptions {
+    return this.cloneOptsForDuplicate(opts) as BullJobOptions;
   }
 
   /**
@@ -615,7 +632,7 @@ export class BullDriver implements QueueDriver {
       'failed',
       'paused',
     ];
-    const allBullTypes: Bull.JobStatus[] = [
+    const allBullTypes: BullJobStatus[] = [
       'waiting',
       'paused',
       'active',
@@ -633,7 +650,7 @@ export class BullDriver implements QueueDriver {
     const queueNames = await this.listQueueNames();
     const perQueueCap = 200;
     let anyQueueHitCap = false;
-    const rows: { queueName: string; job: Bull.Job; sortKey: number }[] = [];
+    const rows: { queueName: string; job: BullJob; sortKey: number }[] = [];
 
     for (const queueName of queueNames) {
       const queue = this.getQueue(queueName);
@@ -648,9 +665,9 @@ export class BullDriver implements QueueDriver {
         if (!job) {
           continue;
         }
-        const dto = this.mapJobToDto(job as Bull.Job);
+        const dto = this.mapJobToDto(job as BullJob);
         const sortKey = dto.processedOn ?? dto.timestamp ?? 0;
-        rows.push({ queueName, job: job as Bull.Job, sortKey });
+        rows.push({ queueName, job: job as BullJob, sortKey });
       }
     }
 
@@ -742,7 +759,7 @@ export class BullDriver implements QueueDriver {
 
       const completedJobs = await queue.getJobs(['completed'], 0, perQueue - 1, false);
       for (const job of completedJobs) {
-        const dto = this.mapJobToDto(job as Bull.Job);
+        const dto = this.mapJobToDto(job as BullJob);
         if (minFinishedOn != null && (dto.finishedOn == null || dto.finishedOn < minFinishedOn)) {
           continue;
         }
@@ -771,7 +788,7 @@ export class BullDriver implements QueueDriver {
 
       const failedJobs = await queue.getJobs(['failed'], 0, perQueue - 1, false);
       for (const job of failedJobs) {
-        const dto = this.mapJobToDto(job as Bull.Job);
+        const dto = this.mapJobToDto(job as BullJob);
         if (minFinishedOn != null && (dto.finishedOn == null || dto.finishedOn < minFinishedOn)) {
           continue;
         }

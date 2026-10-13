@@ -1,7 +1,13 @@
-import type { BullRootModuleOptions } from '@nestjs/bull';
 import type { NextFunction, Request, Response } from 'express';
+import type { RedisOptions } from 'ioredis';
 
 export const BULLSEYE_OPTIONS = Symbol('BULLSEYE_OPTIONS');
+
+/**
+ * Redis connection for Bull / BullMQ queues — same shape as `BullModule.forRoot({ redis })`
+ * or a BullMQ `connection` (URL string or ioredis options).
+ */
+export type BullseyeRedisConnection = string | RedisOptions;
 
 export type BullseyeExpressMiddleware = (
   req: Request,
@@ -39,8 +45,8 @@ export interface BullseyeModuleOptions {
    * Can be absolute or relative to `process.cwd()`.
    */
   faviconPath?: string;
-  /** Same Redis / Sentinel as worker queues (`BullModule.forRoot` / BullMQ connection) */
-  redis: BullRootModuleOptions['redis'];
+  /** Same Redis connection as worker queues (`BullModule.forRoot` / BullMQ `connection`) */
+  redis: BullseyeRedisConnection;
   /** Redis key prefix — same as `prefix` in `BullModule.forRoot` */
   prefix?: string;
   /**
@@ -191,7 +197,10 @@ export interface QueueSummaryDto {
   isPaused: boolean;
 }
 
-/** Bull `getRepeatableJobs()` — cron and fixed intervals */
+/**
+ * Repeatable / scheduled jobs across queues.
+ * Bull classic: `getRepeatableJobs()`. BullMQ 6+: Job Schedulers via `getJobSchedulers()`.
+ */
 export interface RepeatableJobDto {
   queueName: string;
   key: string;

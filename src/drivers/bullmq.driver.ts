@@ -25,9 +25,42 @@ type BullMqLib = typeof import('bullmq');
 const BULLMQ_DEFAULT_JOB_NAME = '__default__';
 
 /**
- * BullMQ `getRepeatableJobs()` returns `pattern` (not `cron`). Fixed intervals are
- * usually in `every`, but legacy / key-derived rows may only have a numeric ms value
- * in the `pattern` slot — see `Repeat.keyToData` in bullmq.
+ * BullMQ 6 removed `Queue#getRepeatableJobs()` in favor of Job Schedulers
+ * (`getJobSchedulers`). BullMQ 5.16+ exposes both — prefer schedulers, fall back
+ * to the legacy API when present.
+ */
+async function listBullMqRepeatableOrSchedulers(
+  queue: import('bullmq').Queue,
+): Promise<Array<Record<string, unknown>>> {
+  const q = queue as import('bullmq').Queue & {
+    getJobSchedulers?: (
+      start?: number,
+      end?: number,
+      asc?: boolean,
+    ) => Promise<object[]>;
+    getRepeatableJobs?: (
+      start?: number,
+      end?: number,
+      asc?: boolean,
+    ) => Promise<object[]>;
+  };
+  if (typeof q.getJobSchedulers === 'function') {
+    return (await q.getJobSchedulers(0, -1, false)).map((row) => ({
+      ...(row as unknown as Record<string, unknown>),
+    }));
+  }
+  if (typeof q.getRepeatableJobs === 'function') {
+    return (await q.getRepeatableJobs(0, -1, false)).map((row) => ({
+      ...(row as unknown as Record<string, unknown>),
+    }));
+  }
+  return [];
+}
+
+/**
+ * BullMQ schedulers / legacy repeatables expose `pattern` (not always `cron`).
+ * Fixed intervals are usually in `every`, but key-derived rows may only have a
+ * numeric ms value in the `pattern` slot.
  */
 function normalizeBullMqRepeatableScheduling(item: Record<string, unknown>): {
   cron: string | null;
@@ -259,23 +292,30 @@ export class BullMqDriver implements QueueDriver {
     const results: QueueSummaryDto[] = [];
     for (const name of names) {
       const queue = this.getQueue(name);
+      // BullMQ 6 removed the `paused` JobType — paused queues keep jobs in `wait`.
       const raw = await queue.getJobCounts(
         'wait',
         'active',
         'completed',
         'failed',
         'delayed',
-        'paused',
+        'prioritized',
+        'waiting-children',
       );
       const isPaused = await (queue as any).isPaused?.();
+      const waiting =
+        ((raw as any).wait ?? 0) +
+        ((raw as any).prioritized ?? 0) +
+        ((raw as any)['waiting-children'] ?? 0);
       results.push({
         name,
         counts: {
-          waiting: (raw as any).wait ?? 0,
+          waiting,
           active: (raw as any).active ?? 0,
           completed: (raw as any).completed ?? 0,
           failed: (raw as any).failed ?? 0,
           delayed: (raw as any).delayed ?? 0,
+          // Always 0 on BullMQ 6+; use `isPaused` for queue pause state.
           paused: (raw as any).paused ?? 0,
         },
         isPaused: Boolean(isPaused),
@@ -316,20 +356,19 @@ export class BullMqDriver implements QueueDriver {
     const aggregated: RepeatableJobDto[] = [];
     for (const queueName of names) {
       const queue = this.getQueue(queueName);
-      const repeatables = await queue.getRepeatableJobs();
-      for (const item of repeatables as any[]) {
-        const row = item as Record<string, unknown>;
-        const { cron, every } = normalizeBullMqRepeatableScheduling(row);
+      const repeatables = await listBullMqRepeatableOrSchedulers(queue);
+      for (const item of repeatables) {
+        const { cron, every } = normalizeBullMqRepeatableScheduling(item);
         aggregated.push({
           queueName,
-          key: String(item.key ?? ''),
-          name: String(item.name ?? ''),
-          id: item.id ?? null,
+          key: String(item['key'] ?? ''),
+          name: String(item['name'] ?? ''),
+          id: (item['id'] as string | null | undefined) ?? null,
           cron,
           every,
-          next: Number(item.next ?? 0),
-          endDate: item.endDate ?? null,
-          tz: item.tz ?? null,
+          next: Number(item['next'] ?? 0),
+          endDate: (item['endDate'] as number | null | undefined) ?? null,
+          tz: (item['tz'] as string | null | undefined) ?? null,
         });
       }
     }
@@ -351,10 +390,10 @@ export class BullMqDriver implements QueueDriver {
         continue;
       }
       const queue = this.getQueue(queueName);
-      const repeatables = await queue.getRepeatableJobs();
-      for (const item of repeatables as any[]) {
-        if (item?.name) {
-          names.add(String(item.name));
+      const repeatables = await listBullMqRepeatableOrSchedulers(queue);
+      for (const item of repeatables) {
+        if (item['name']) {
+          names.add(String(item['name']));
         }
       }
       const failedSample = await (queue as any).getFailed?.(0, 79);
@@ -400,8 +439,9 @@ export class BullMqDriver implements QueueDriver {
 
   private bullmqTypesForStatus(status: SingleQueueJobStatus): string[] {
     const map: Record<SingleQueueJobStatus, string[]> = {
-      waiting: ['wait'],
-      paused: ['paused'],
+      waiting: ['wait', 'waiting', 'prioritized', 'waiting-children'],
+      // BullMQ 6+: no separate paused list — callers resolve via isPaused + waiting.
+      paused: [],
       active: ['active'],
       delayed: ['delayed'],
       completed: ['completed'],
@@ -421,8 +461,20 @@ export class BullMqDriver implements QueueDriver {
     end: number,
   ): Promise<JobListItemDto[]> {
     const queue = this.getQueue(queueName);
-    const types = this.bullmqTypesForStatus(status);
-    const ascending = this.jobListAscending(status);
+    let effectiveStatus = status;
+    if (status === 'paused') {
+      const isPaused = Boolean(await (queue as any).isPaused?.());
+      if (!isPaused) {
+        return [];
+      }
+      // Paused queues still store jobs as waiting (BullMQ 6+).
+      effectiveStatus = 'waiting';
+    }
+    const types = this.bullmqTypesForStatus(effectiveStatus);
+    if (types.length === 0) {
+      return [];
+    }
+    const ascending = this.jobListAscending(effectiveStatus);
     const jobs = await queue.getJobs(types as any, start, end, ascending);
     const filtered = (jobs as any[]).filter((job) => job != null);
     return filtered.map((job) => this.mapJobToDto(job));

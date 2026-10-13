@@ -9,6 +9,7 @@ export type {
   BullseyeMcpOptions,
   BullseyeModuleOptions,
   BullseyeOperatorProfile,
+  BullseyeRedisConnection,
   JobListItemDto,
   JobStatusFilter,
   QueueSummaryDto,

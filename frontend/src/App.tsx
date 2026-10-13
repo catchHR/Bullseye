@@ -444,7 +444,7 @@ const NAV_ITEMS: { id: NavView; label: string; icon: typeof LayoutDashboard }[] 
 const NAV_ITEM_TOOLTIP: Record<NavView, string> = {
   overview: 'Live counts, queue mix, and session charts.',
   queues: 'Pick a queue, filter jobs, and open job details.',
-  schedules: 'Cron and interval repeatable jobs (Bull repeat).',
+  schedules: 'Cron and interval schedules (Bull repeat / BullMQ job schedulers).',
   log: 'Cross-queue sample of completed and failed job history.',
   alerts: 'Notify when queue depth crosses a threshold.',
 };

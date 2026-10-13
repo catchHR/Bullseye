@@ -1,6 +1,19 @@
 # Development & publishing
 
-This document is for maintainers of the repository. The npm `README.md` is intentionally focused on **usage**.
+Maintainer notes. End-user docs live in `README.md` and `CHANGELOG.md`.
+
+---
+
+## Compatibility matrix (local)
+
+| Stack | Dev dependency (approx.) |
+|-------|---------------------------|
+| NestJS | `@nestjs/common` / `core` **12** |
+| Bull classic | `bull` **4** + `@nestjs/bull` **12** |
+| BullMQ | `bullmq` **6** (Job Schedulers) |
+| Node | **≥ 20.19** |
+
+Peers stay optional for `bull` / `bullmq` / `@nestjs/bull` so hosts can install only what they use.
 
 ---
 
@@ -11,16 +24,14 @@ npm install
 npm run build
 ```
 
-The build does two things:
+1. `build:frontend` — Vite SPA from `frontend/` → `public/`
+2. `build:lib` — Nest module `src/` → `dist/`
 
-1. `build:frontend`: builds the Vite SPA from `frontend/` into `public/`
-2. `build:lib`: compiles the NestJS module from `src/` into `dist/`
-
-The npm package includes both `dist/` and `public/` via `"files": ["dist", "public"]`.
+Package contents: `"files": ["dist", "public"]`.
 
 ---
 
-## UI development (local)
+## UI development
 
 ```bash
 cd frontend
@@ -32,13 +43,19 @@ Production builds write to `../public/`.
 
 ---
 
+## Screenshots for GitHub
+
+See [`docs/screenshots/README.md`](./docs/screenshots/README.md) for the labeled shot list. After capturing, drop files into `docs/screenshots/` so README images resolve.
+
+---
+
 ## MCP (manual test)
 
-1. Enable MCP in your host app's `BullseyeModule.forRoot({ …, mcp: { apiKey: '…' } })`.
+1. Enable MCP: `BullseyeModule.forRoot({ …, mcp: { apiKey: '…' } })`.
 2. `npm run build:lib` and start the Nest app.
-3. Add a Cursor MCP entry pointing at `http://localhost:<port><basePath>/mcp` with `Authorization: Bearer <apiKey>`.
-4. In Cursor → Tools, verify tools list and run `list_queues` / `get_job` on a failed job.
-5. Confirm `401` without Bearer header and that the SPA under `basePath` still works.
+3. Point Cursor MCP at `http://localhost:<port><basePath>/mcp` with `Authorization: Bearer <apiKey>`.
+4. Verify tools (`list_queues`, `get_job`, …) and `401` without Bearer.
+5. Confirm the SPA under `basePath` still works.
 
 ---
 
@@ -48,11 +65,10 @@ Production builds write to `../public/`.
 npm publish --access public
 ```
 
-Before publishing, verify `package.json` values like `name` and `version` are correct.
+Before publishing, check `package.json` `name`, `version`, and repository URLs (GitHub org/repo).
 
 ---
 
 ## Frontend stack
 
-React, Vite, Tailwind, Recharts (sources live in `frontend/`).
-
+React, Vite, Tailwind, Recharts (`frontend/`).

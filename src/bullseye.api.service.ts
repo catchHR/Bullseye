@@ -1,13 +1,8 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ModulesContainer } from '@nestjs/core';
-/** CJS-Queue-Konstruktor — `import Bull from 'bull'` wird zu `require(...).default` und ist zur Laufzeit undefined. */
-import Bull = require('bull');
 import IORedis, { type RedisOptions } from 'ioredis';
 import { BullMqDriver } from './drivers/bullmq.driver';
 import { createBullseyeScanRedisClient } from './bullseye.redis-client';
-
-/** Bull `Job.DEFAULT_JOB_NAME` when `name` is omitted in `queue.add`. */
-const BULL_DEFAULT_JOB_NAME = '__default__';
 import {
   BULLSEYE_OPTIONS,
   BullseyeModuleOptions,
@@ -23,12 +18,24 @@ import {
   SlowestRunDto,
 } from './bullseye.types';
 
+/** Bull `Job.DEFAULT_JOB_NAME` when `name` is omitted in `queue.add`. */
+const BULL_DEFAULT_JOB_NAME = '__default__';
+
+type BullLib = typeof import('bull');
+type BullQueue = import('bull').Queue;
+type BullJob = import('bull').Job;
+type BullJobStatus = import('bull').JobStatus;
+type BullJobCounts = import('bull').JobCounts;
+type BullJobOptions = import('bull').JobOptions;
+
 @Injectable()
 export class BullseyeApiService implements OnModuleDestroy {
   private readonly logger = new Logger(BullseyeApiService.name);
   private readonly scanRedis: IORedis;
-  private readonly queueCache = new Map<string, Bull.Queue>();
+  private readonly queueCache = new Map<string, BullQueue>();
   private bullmqDriver: BullMqDriver | null = null;
+  /** Lazily loaded — only required when `backend: 'bull'` (not for BullMQ-only hosts). */
+  private bullLib: BullLib | null = null;
   private readonly attachedAlertQueues = new Set<string>();
 
   /** Matches `@nestjs/bull-shared` / `getQueueToken`: `BullQueue_<name>` */
@@ -40,6 +47,18 @@ export class BullseyeApiService implements OnModuleDestroy {
     private readonly modulesContainer: ModulesContainer,
   ) {
     this.scanRedis = this.createRedisClient();
+  }
+
+  /**
+   * Runtime `require('bull')` so BullMQ-only apps do not need the legacy `bull` package
+   * installed. CJS export has no `default` — avoid `import Bull from 'bull'`.
+   */
+  private getBullLib(): BullLib {
+    if (!this.bullLib) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      this.bullLib = require('bull') as BullLib;
+    }
+    return this.bullLib;
   }
 
   /**
@@ -177,16 +196,18 @@ export class BullseyeApiService implements OnModuleDestroy {
 
   /**
    * Shared Queue instance (e.g. alert listener) — same wiring as API read paths.
+   * Only valid when `backend` is `'bull'` (not BullMQ).
    */
-  getQueueInstance(name: string): Bull.Queue {
+  getQueueInstance(name: string): BullQueue {
     return this.getQueue(name);
   }
 
-  private getQueue(name: string): Bull.Queue {
+  private getQueue(name: string): BullQueue {
     const existing = this.queueCache.get(name);
     if (existing) {
       return existing;
     }
+    const Bull = this.getBullLib();
     const queue = new Bull(name, {
       redis: this.options.redis,
       prefix: this.options.prefix,
@@ -387,7 +408,7 @@ export class BullseyeApiService implements OnModuleDestroy {
       const queue = this.getQueue(name);
       await queue.isReady();
       const raw = await queue.getJobCounts();
-      const rawWithPaused = raw as Bull.JobCounts & { paused?: number };
+      const rawWithPaused = raw as BullJobCounts & { paused?: number };
       const isPaused = await queue.isPaused();
       results.push({
         name,
@@ -450,7 +471,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     await queue.empty();
   }
 
-  private mapJobToDto(job: Bull.Job): JobListItemDto {
+  private mapJobToDto(job: BullJob): JobListItemDto {
     const json = job.toJSON();
     const rawOpts = json.opts;
     const opts: Record<string, unknown> =
@@ -480,8 +501,8 @@ export class BullseyeApiService implements OnModuleDestroy {
   }
 
   /** Bull-Typen erwarten `JobStatus[]`; Runtime akzeptiert dieselben Status-Strings wie in den `.d.ts`. */
-  private bullTypesForStatus(status: SingleQueueJobStatus): Bull.JobStatus[] {
-    const map: Record<SingleQueueJobStatus, Bull.JobStatus[]> = {
+  private bullTypesForStatus(status: SingleQueueJobStatus): BullJobStatus[] {
+    const map: Record<SingleQueueJobStatus, BullJobStatus[]> = {
       waiting: ['waiting'],
       paused: ['paused'],
       active: ['active'],
@@ -606,7 +627,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     const ascending = this.jobListAscending(status);
     const jobs = await queue.getJobs(types, start, end, ascending);
     const filtered = jobs.filter((job) => job != null);
-    return filtered.map((job) => this.mapJobToDto(job as Bull.Job));
+    return filtered.map((job) => this.mapJobToDto(job as BullJob));
   }
 
   async getJobById(
@@ -622,7 +643,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     if (!job) {
       return null;
     }
-    const dto = this.mapJobToDto(job as Bull.Job);
+    const dto = this.mapJobToDto(job as BullJob);
     try {
       const logBundle = (await queue.getJobLogs(jobId, 0, 499)) as {
         logs: string[];
@@ -657,7 +678,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     if (state !== 'delayed') {
       throw new Error(`JOB_NOT_DELAYED:${state}`);
     }
-    await (job as Bull.Job).promote();
+    await (job as BullJob).promote();
   }
 
   /**
@@ -673,7 +694,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     if (!job) {
       throw new Error('JOB_NOT_FOUND');
     }
-    await (job as Bull.Job).remove();
+    await (job as BullJob).remove();
   }
 
   /**
@@ -693,7 +714,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     if (state !== 'failed') {
       throw new Error(`JOB_NOT_FAILED:${state}`);
     }
-    await (job as Bull.Job).retry();
+    await (job as BullJob).retry();
   }
 
   /**
@@ -720,7 +741,7 @@ export class BullseyeApiService implements OnModuleDestroy {
         throw new Error('INVALID_DATA_JSON');
       }
     }
-    let opts: Bull.JobOptions = {};
+    let opts: BullJobOptions = {};
     if (payload.opts !== undefined && payload.opts !== null) {
       let rawOpts: unknown = payload.opts;
       if (typeof rawOpts === 'string') {
@@ -812,7 +833,7 @@ export class BullseyeApiService implements OnModuleDestroy {
     const added = await queue.add(
       name,
       data as object,
-      mergedOpts as Bull.JobOptions,
+      mergedOpts as BullJobOptions,
     );
     return { id: String(added.id) };
   }
@@ -824,8 +845,8 @@ export class BullseyeApiService implements OnModuleDestroy {
     return next;
   }
 
-  private cloneOptsForAdd(opts: Record<string, unknown>): Bull.JobOptions {
-    return this.cloneOptsForDuplicate(opts) as Bull.JobOptions;
+  private cloneOptsForAdd(opts: Record<string, unknown>): BullJobOptions {
+    return this.cloneOptsForDuplicate(opts) as BullJobOptions;
   }
 
   /**
@@ -851,7 +872,7 @@ export class BullseyeApiService implements OnModuleDestroy {
       'failed',
       'paused',
     ];
-    const allBullTypes: Bull.JobStatus[] = [
+    const allBullTypes: BullJobStatus[] = [
       'waiting',
       'paused',
       'active',
@@ -868,7 +889,7 @@ export class BullseyeApiService implements OnModuleDestroy {
       .map((segment) => segment.trim().toLowerCase())
       .filter(Boolean);
 
-    let bullTypes: Bull.JobStatus[];
+    let bullTypes: BullJobStatus[];
     if (segments.length === 0 || segments.includes('all')) {
       bullTypes = [...allBullTypes];
     } else {
@@ -884,7 +905,7 @@ export class BullseyeApiService implements OnModuleDestroy {
       } else if (uniqueFilters.length === validStatuses.length) {
         bullTypes = [...allBullTypes];
       } else {
-        const picked = new Set<Bull.JobStatus>();
+        const picked = new Set<BullJobStatus>();
         for (const filter of uniqueFilters) {
           for (const bullType of this.bullTypesForStatus(filter)) {
             picked.add(bullType);
@@ -897,14 +918,14 @@ export class BullseyeApiService implements OnModuleDestroy {
     const maxPull = Math.min(Math.max(offset + limit + 80, 120), 2500);
     const queueNames = await this.listQueueNames();
 
-    const rows: Array<{ queueName: string; job: Bull.Job; sortKey: number }> = [];
+    const rows: Array<{ queueName: string; job: BullJob; sortKey: number }> = [];
     let anyQueueHitCap = false;
 
     for (const queueName of queueNames) {
       const queue = this.getQueue(queueName);
       await queue.isReady();
       const jobs = await queue.getJobs(bullTypes, 0, maxPull - 1, false);
-      const definedJobs = jobs.filter((job): job is Bull.Job => job != null);
+      const definedJobs = jobs.filter((job): job is BullJob => job != null);
       if (definedJobs.length >= maxPull) {
         anyQueueHitCap = true;
       }
@@ -1018,7 +1039,7 @@ export class BullseyeApiService implements OnModuleDestroy {
         false,
       );
       for (const job of completedJobs) {
-        const dto = this.mapJobToDto(job as Bull.Job);
+        const dto = this.mapJobToDto(job as BullJob);
         if (
           minFinishedOn != null &&
           (dto.finishedOn == null || dto.finishedOn < minFinishedOn)
@@ -1050,7 +1071,7 @@ export class BullseyeApiService implements OnModuleDestroy {
 
       const failedJobs = await queue.getJobs(['failed'], 0, perQueue - 1, false);
       for (const job of failedJobs) {
-        const dto = this.mapJobToDto(job as Bull.Job);
+        const dto = this.mapJobToDto(job as BullJob);
         if (
           minFinishedOn != null &&
           (dto.finishedOn == null || dto.finishedOn < minFinishedOn)

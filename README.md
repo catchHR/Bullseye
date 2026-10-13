@@ -1,20 +1,65 @@
 # nestjs-bullseye
 
-> **Work in progress**: This project is currently being developed primarily for internal use at our company.  
-> We’re happy if you try it out and would love to get feedback (issues, suggestions, and PRs are welcome).
+**Open-source embedded queue dashboard for [Bull](https://github.com/OptimalBits/bull) and [BullMQ](https://docs.bullmq.io/) in NestJS (Express).**
 
-Embedded **web dashboard for [Bull](https://github.com/OptimalBits/bull)** (classic Bull queues) in a **NestJS** app with **Express**. Includes queue/job overviews, repeatable jobs, cross-queue logs, runtime statistics, optional **webhook alerts**, and an interactive **time vs. duration** chart on the jobs screen. The UI ships as **static assets** — no separate service required.
+One Nest module mounts a full SPA + REST API under a path you choose — no separate process, no extra Redis DB required for the UI itself. Optional **webhook alerts** and an embedded **MCP server** for AI tools (Cursor, Claude Desktop, …).
 
-> Targets: **Bull (bull + @nestjs/bull)** and **BullMQ (bullmq)**.
+Inspired by tools like [Bull Board](https://github.com/felixmosh/bull-board) and [Taskforce.sh](https://taskforce.sh/) — Bullseye brings a similar queue-ops experience **into your NestJS app** as a self-hosted, MIT-licensed module you control.
+
+[![npm version](https://img.shields.io/npm/v/@catchhr/nestjs-bullseye.svg)](https://www.npmjs.com/package/@catchhr/nestjs-bullseye)
+[![license](https://img.shields.io/npm/l/@catchhr/nestjs-bullseye.svg)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen.svg)](https://nodejs.org/)
+[![NestJS](https://img.shields.io/badge/nestjs-11%20%7C%2012-E0234E.svg)](https://nestjs.com/)
+[![BullMQ](https://img.shields.io/badge/bullmq-5.16%2B%20%7C%206-blue.svg)](https://docs.bullmq.io/)
+
+> **v0.2.0** targets **NestJS 11–12** and **BullMQ 5.16+ / 6** (Job Schedulers). See [CHANGELOG](./CHANGELOG.md) for breaking changes.
 
 ---
 
-## Web UI highlights
+## Screenshots
 
-- **Dashboard** — Workload tiles and charts (live depth, active-job sampling, performance metrics). Content uses comfortable page inset padding.
-- **Queues & jobs** — Queue list and job table use the **full content width** (edge-to-edge under the header) for dense monitoring.
-- **Time · duration heatmap** (jobs view) — Optional collapsible chart: each job is plotted by finish/process time (X) and processing duration (Y). **Brush-drag** a rectangle to filter the table by both dimensions. **Time preset** (stored in `localStorage`) includes **“All time”** (default): the horizontal axis fits the **currently loaded job slice**; other presets are rolling windows (e.g. last hour) and calendar ranges (today, this week, etc.).
-- **Repeatable jobs**, **cross-queue job log**, and **alerts** — Same inset layout as the dashboard for readable margins.
+| Dashboard · Workload | Dashboard · Performance |
+|----------------------|-------------------------|
+| ![Dashboard overview](docs/screenshots/01-dashboard-overview.png) | ![Dashboard performance](docs/screenshots/01b-dashboard-performance.png) |
+
+| Queues & jobs | Job detail |
+|---------------|------------|
+| ![Queues and jobs](docs/screenshots/02-queues-jobs.png) | ![Job detail](docs/screenshots/03-job-detail.png) |
+
+| Schedules | Alerts |
+|-----------|--------|
+| ![Schedules](docs/screenshots/05-schedules.png) | ![Alerts](docs/screenshots/07-alerts.png) |
+
+| Command menu (⌘K) |
+|-------------------|
+| ![Command menu](docs/screenshots/10-command-menu.png) |
+
+---
+
+## Features
+
+- **Dashboard** — Live depth tiles, active sampling, performance histogram, Redis metrics
+- **Queues & jobs** — Filter by status, search, promote delayed jobs, retry failed, remove, add & duplicate
+- **Time · duration heatmap** — Brush-select jobs by finish time (X) and duration (Y)
+- **Schedules** — Bull repeatables and BullMQ **Job Schedulers** (cron / every)
+- **Job log** — Cross-queue merged sample, sorted by start time
+- **Alerts** — Threshold / event webhooks (config in Redis; optional JSON migration path)
+- **Security** — HTTP Basic auth + custom Express middleware under `basePath`
+- **MCP** — Optional Streamable HTTP endpoint for AI clients (`list_queues`, `get_job`, …)
+
+---
+
+## Requirements
+
+| | Minimum |
+|---|---|
+| Node.js | **20.19+** or **22.12+** (NestJS 12) |
+| NestJS | **11** or **12** (`@nestjs/common` / `@nestjs/core`) |
+| HTTP adapter | **Express** (Fastify is not supported) |
+| Queue backend | **Bull 4** *or* **BullMQ ≥ 5.16** (**6** recommended) |
+| Redis | Same instance / prefix as your workers |
+
+Install **either** classic Bull **or** BullMQ peers — you do not need both.
 
 ---
 
@@ -24,30 +69,29 @@ Embedded **web dashboard for [Bull](https://github.com/OptimalBits/bull)** (clas
 npm install @catchhr/nestjs-bullseye
 ```
 
-### Peer dependencies (install in the host app)
-
-If your app doesn’t have them yet:
+### Bull (classic)
 
 ```bash
-npm install @nestjs/common @nestjs/core @nestjs/bull bull ioredis express
+npm install @nestjs/bull bull ioredis express
 ```
 
-### Why there’s a `.npmrc` in this package
+### BullMQ
 
-This repository includes a `.npmrc` with `omit=peer` so `npm install` does **not** pull duplicate copies of `@nestjs/*` or `bull` into this package’s own `node_modules`. That helps avoid DI/runtime issues caused by multiple NestJS instances being resolved at runtime.
+```bash
+npm install bullmq ioredis express
+# optional Nest integration:
+# npm install @nestjs/bullmq
+```
 
-> Maintainer docs (build/publish/UI development): see `DEVELOPMENT.md`.
+`@nestjs/bull` and `bull` are **optional** peers when you only use `backend: 'bullmq'`.
 
 ---
 
 ## Quick start
 
-Import `BullseyeModule` **after** you configure Bull (`BullModule.forRoot` / `registerQueue`). Use the **same Redis settings and the same `prefix`** as your workers.
+Import `BullseyeModule` **after** your queue module setup. Use the **same Redis connection and `prefix`** as your workers.
 
-### Backend selection (Bull vs BullMQ)
-
-- Default: `backend: 'bull'`
-- BullMQ: set `backend: 'bullmq'` (queues can be discovered via Redis key scanning, or configured explicitly via `queueNames`).
+### Bull + `@nestjs/bull`
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -65,15 +109,33 @@ import { BullseyeModule } from '@catchhr/nestjs-bullseye';
       basePath: '/queue-dashboard',
       redis: { host: 'localhost', port: 6379 },
       prefix: 'myapp',
-      backend: 'bull', // or: 'bullmq'
-      queueNames: ['email'], // optional allow-list (recommended in locked-down environments)
+      backend: 'bull', // default
+      queueNames: ['email'], // optional allow-list
+      basicAuth: {
+        username: process.env.BULLSEYE_USER!,
+        password: process.env.BULLSEYE_PASSWORD!,
+      },
     }),
   ],
 })
 export class AppModule {}
 ```
 
-Dashboard: `http://localhost:3000/queue-dashboard` (adjust the port to your Nest app).
+Open: `http://localhost:3000/queue-dashboard`
+
+### BullMQ
+
+```typescript
+BullseyeModule.forRoot({
+  basePath: '/queue-dashboard',
+  redis: { host: 'localhost', port: 6379 },
+  prefix: 'myapp',
+  backend: 'bullmq',
+  queueNames: ['email'], // recommended in locked-down envs
+}),
+```
+
+Queues are discovered via Nest DI (Bull) and/or Redis `SCAN` on `{prefix}:*:meta` when `autoDiscoverQueues` is enabled (default).
 
 ### Async config
 
@@ -83,50 +145,59 @@ BullseyeModule.forRootAsync({
   inject: [ConfigService],
   useFactory: (config: ConfigService) => ({
     basePath: '/queue-dashboard',
-    redis: config.get('REDIS_URL'),
+    redis: config.getOrThrow('REDIS_URL'),
     prefix: config.get('BULL_PREFIX'),
+    backend: 'bullmq',
+    basicAuth: {
+      username: config.getOrThrow('BULLSEYE_USER'),
+      password: config.getOrThrow('BULLSEYE_PASSWORD'),
+    },
   }),
 }),
 ```
 
 ---
 
-## Module options (`BullseyeModuleOptions`)
+## Module options
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `backend` | `'bull' \| 'bullmq'` | Queue backend implementation (default: `bull`). |
-| `basePath` | `string` | Mount path **without** a trailing slash (SPA + `/api/*`). |
-| `faviconPath` | `string?` | Optional favicon file to serve as `${basePath}/favicon.ico` (absolute or relative to `process.cwd()`). |
-| `redis` | same shape as `BullModule.forRoot` | Must match your workers. |
-| `prefix` | `string?` | Bull key prefix (same as in `BullModule.forRoot`). |
-| `queueNames` | `string[]?` | Fixed allow-list; if omitted, queues can be discovered automatically (see below). |
-| `autoDiscoverQueues` | `boolean` | Default `true`. If `false`, only configured/DI-provided queues are exposed. |
-| `basicAuth` | `{ username, password } \| null` | HTTP Basic auth for UI and API under `basePath`. |
-| `middleware` | Express middleware \| `null` | Runs after Basic auth (e.g. additional checks). |
-| `alertsStoragePath` | `string?` | JSON file for alerts (default: `.bullseye-alerts.json` in `process.cwd()`). |
-| `operator` | `BullseyeOperatorProfile \| null` | Optional sidebar profile (name/contact/avatar); returned via `GET …/api/ui-config`. |
-| `mcp` | `BullseyeMcpOptions \| null` | Optional embedded MCP server (Streamable HTTP) for AI clients — see below. |
+| `backend` | `'bull' \| 'bullmq'` | Queue implementation (default: `bull`). |
+| `basePath` | `string` | Mount path **without** trailing slash (SPA + `/api/*`). |
+| `faviconPath` | `string?` | Favicon served as `${basePath}/favicon.ico`. |
+| `redis` | `string \| RedisOptions` | Must match workers. |
+| `prefix` | `string?` | Redis key prefix (same as Bull / BullMQ). |
+| `queueNames` | `string[]?` | Allow-list; omit to auto-discover. |
+| `autoDiscoverQueues` | `boolean` | Default `true`. |
+| `basicAuth` | `{ username, password } \| null` | HTTP Basic for UI + API under `basePath`. |
+| `middleware` | Express middleware \| `null` | Runs after Basic auth. |
+| `alertsStoragePath` | `string?` | Legacy JSON migration only; Redis is source of truth. |
+| `alertsInstanceId` | `string?` | Separates alert keys in a shared Redis DB. |
+| `operator` | profile \| `null` | Sidebar name / email / avatar (`GET …/api/ui-config`). |
+| `mcp` | MCP options \| `null` | Embedded MCP server — see below. |
 
-Exported token: **`BULLSEYE_OPTIONS`**.
+Exported DI token: **`BULLSEYE_OPTIONS`**.
 
-### MCP (Cursor, Claude Desktop, …)
+---
 
-When `mcp` is set, Bullseye exposes a **Streamable HTTP** MCP endpoint at `${basePath}${mcp.path}` (default `${basePath}/mcp`). It uses **Bearer token** auth (`Authorization: Bearer <apiKey>`) and is mounted **outside** HTTP Basic auth so programmatic clients do not need dashboard credentials.
+## MCP (Cursor, Claude Desktop, …)
+
+When `mcp` is set, Bullseye exposes a **Streamable HTTP** MCP endpoint at `${basePath}${mcp.path}` (default `${basePath}/mcp`). Auth is **Bearer** (`Authorization: Bearer <apiKey>`). The endpoint is **outside** HTTP Basic auth so automation clients do not need dashboard credentials.
 
 ```typescript
 BullseyeModule.forRoot({
   basePath: '/queue-dashboard',
   redis: { host: 'localhost', port: 6379 },
+  backend: 'bullmq',
   mcp: {
     path: '/mcp',
     apiKey: process.env.BULLSEYE_MCP_API_KEY!,
-    readOnly: true, // default — write tools when false (future)
+    readOnly: true, // default
   },
 }),
 ```
 
-**Cursor** (`.cursor/mcp.json` in your app or `~/.cursor/mcp.json`):
+**Cursor** (`.cursor/mcp.json` or `~/.cursor/mcp.json`):
 
 ```json
 {
@@ -143,36 +214,95 @@ BullseyeModule.forRoot({
 
 Read-only tools: `list_queues`, `list_jobs`, `get_job`, `get_job_log`, `get_runtime_stats`, `list_repeatable_jobs`, `get_redis_metrics`.
 
-Do **not** expose the MCP endpoint publicly. Use a long random `apiKey`, VPN/firewall, and the same network posture as the dashboard.
-
-Queues can be detected via Nest DI (Bull classic) and/or via Redis key scanning (`{prefix}:*:meta`).
+Do **not** expose MCP publicly. Use a long random `apiKey` and the same network controls as the dashboard.
 
 ---
 
 ## Security
 
-Do **not** expose this dashboard publicly without protection. Use `basicAuth`, custom `middleware`, and network controls (VPN / firewall).
+Do **not** expose this dashboard on the public internet without protection. Prefer:
 
-If MCP is enabled, protect `${basePath}/mcp` with a strong `mcp.apiKey` and the same network controls — it is not covered by `basicAuth`.
+1. `basicAuth` and/or custom `middleware` (SSO, IP allow-list, …)
+2. VPN / private network / reverse-proxy auth
+3. Strong `mcp.apiKey` if MCP is enabled (MCP is **not** covered by Basic auth)
 
-### Alerts / webhooks
-
-- Config is stored as JSON at `alertsStoragePath` (default: `.bullseye-alerts.json`).
-- Bull events are emitted from the **local** queue instance — typically only when workers run in the **same** NestJS process.
+Alert webhooks fire from the **local** queue instance — typically only when workers run in the **same** Nest process as Bullseye.
 
 ---
 
-## API overview (mounted under `basePath`)
+## API overview
 
-- `GET /api/ui-config`, `GET /api/queues`, `GET /api/repeatable-jobs`, `GET /api/stats/job-runtime`, `GET /api/job-log`
-- `GET/POST /api/alerts`, `PUT/DELETE /api/alerts/:id`, `GET /api/alerts/trigger-types`, `GET /api/alerts/suggested-job-names?queues=a,b`
-- `GET /api/queues/:queueName/jobs`, `GET /api/queues/:queueName/jobs/:jobId`
-- `POST /api/queues/:queueName/jobs` — create a job (body: `{ name?, data, opts? }`, JSON)
-- `POST /api/queues/:queueName/jobs/:jobId/promote` — promote a delayed job to **waiting** (204)
-- `POST /api/queues/:queueName/jobs/:jobId/duplicate` — duplicate a job (body: `{ name?, data?, opts? }`; `opts` replaces the source `opts` after stripping `jobId`/`timestamp`)
+Mounted under `basePath`:
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/api/ui-config` | Operator sidebar profile |
+| `GET` | `/api/queues` | Queue summaries + counts |
+| `GET` | `/api/repeatable-jobs` | Schedules / Job Schedulers |
+| `GET` | `/api/stats/job-runtime` | Duration samples / histogram |
+| `GET` | `/api/job-log` | Cross-queue log |
+| `GET` | `/api/redis/metrics` | Redis `INFO` snapshot |
+| `GET/POST` | `/api/alerts` | Alert CRUD |
+| `PUT/DELETE` | `/api/alerts/:id` | |
+| `GET` | `/api/queues/:queueName/jobs` | List / merge statuses |
+| `GET` | `/api/queues/:queueName/jobs/:jobId` | Detail + logs |
+| `POST` | `/api/queues/:queueName/jobs` | Enqueue |
+| `POST` | `…/jobs/:jobId/promote` | Delayed → waiting |
+| `POST` | `…/jobs/:jobId/retry` | Failed → retry |
+| `POST` | `…/jobs/:jobId/duplicate` | Clone with overrides |
+| `DELETE` | `…/jobs/:jobId` | Remove |
+| `POST` | `…/pause` · `/resume` · `/empty` | Queue controls |
+
+---
+
+## BullMQ 6 notes
+
+BullMQ 6 **removed** legacy repeatable APIs (`getRepeatableJobs`, `repeat` on `queue.add`, …) in favor of **Job Schedulers** (`upsertJobScheduler`, `getJobSchedulers`, `removeJobScheduler`).
+
+Bullseye’s Schedules view uses `getJobSchedulers()` (with a fallback to `getRepeatableJobs()` on older BullMQ 5.x). If you upgrade producers/workers to BullMQ 6, migrate scheduled jobs first — see the [official migration guide](https://docs.bullmq.io/guide/migrations/migrate-from-v5-to-v6) and this package’s [CHANGELOG](./CHANGELOG.md).
+
+Also in BullMQ 6: the **`paused` job state is gone**. Pausing a queue leaves jobs in **waiting**; use the queue’s `isPaused` flag (shown in the UI) rather than a separate paused job list.
+
+---
+
+## Development
+
+Maintainer build / publish / MCP test notes: **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
+
+```bash
+npm install
+npm run build          # frontend → public/ + library → dist/
+cd frontend && npm run dev   # Vite SPA only
+```
+
+---
+
+## Contributing
+
+Issues and PRs are welcome. Please:
+
+1. Open an issue for larger changes
+2. Keep diffs focused (library *or* SPA unless they must ship together)
+3. Run `npm run build` before opening a PR
+4. Document user-facing changes in `CHANGELOG.md`
+
+---
+
+## Inspiration & related projects
+
+Bullseye is **open source** ([MIT](./LICENSE)) and was inspired by the broader Bull / BullMQ ecosystem:
+
+| Project | What it is |
+|---------|------------|
+| [Bull Board](https://github.com/felixmosh/bull-board) | Popular open-source UI to inspect Bull / BullMQ queues |
+| [Taskforce.sh](https://taskforce.sh/) | Professional hosted dashboard (by the BullMQ creators) with monitoring, teams, alerts, and MCP |
+
+Those projects set the bar for what “good” queue visibility looks like. Bullseye aims at a complementary niche: **embed the dashboard in NestJS**, keep data in **your** Redis, and ship extras like webhook alerts and an optional MCP endpoint — without a separate SaaS or sidecar process.
+
+Not affiliated with Bull Board or Taskforce.sh; names and logos belong to their respective owners.
 
 ---
 
 ## License
 
-MIT
+[MIT](./LICENSE) — free to use, modify, and distribute.

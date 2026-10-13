@@ -8,6 +8,7 @@ Inspired by tools like [Bull Board](https://github.com/felixmosh/bull-board) and
 
 [![npm version](https://img.shields.io/npm/v/@catchhr/nestjs-bullseye.svg)](https://www.npmjs.com/package/@catchhr/nestjs-bullseye)
 [![license](https://img.shields.io/npm/l/@catchhr/nestjs-bullseye.svg)](./LICENSE)
+[![GitHub](https://img.shields.io/badge/github-catchHR%2FBullseye-181717.svg)](https://github.com/catchHR/Bullseye)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen.svg)](https://nodejs.org/)
 [![NestJS](https://img.shields.io/badge/nestjs-11%20%7C%2012-E0234E.svg)](https://nestjs.com/)
 [![BullMQ](https://img.shields.io/badge/bullmq-5.16%2B%20%7C%206-blue.svg)](https://docs.bullmq.io/)
@@ -279,9 +280,9 @@ cd frontend && npm run dev   # Vite SPA only
 
 ## Contributing
 
-Issues and PRs are welcome. Please:
+Issues and PRs are welcome on [GitHub](https://github.com/catchHR/Bullseye). Please:
 
-1. Open an issue for larger changes
+1. Open an [issue](https://github.com/catchHR/Bullseye/issues) for larger changes
 2. Keep diffs focused (library *or* SPA unless they must ship together)
 3. Run `npm run build` before opening a PR
 4. Document user-facing changes in `CHANGELOG.md`

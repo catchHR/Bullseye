@@ -6,12 +6,12 @@
   "author": "",
   "repository": {
     "type": "git",
-    "url": "https://github.com/catchhr/nestjs-bullseye.git"
+    "url": "https://github.com/catchHR/Bullseye.git"
   },
   "bugs": {
-    "url": "https://github.com/catchhr/nestjs-bullseye/issues"
+    "url": "https://github.com/catchHR/Bullseye/issues"
   },
-  "homepage": "https://github.com/catchhr/nestjs-bullseye#readme",
+  "homepage": "https://github.com/catchHR/Bullseye#readme",
   "publishConfig": {
     "access": "public"
   },

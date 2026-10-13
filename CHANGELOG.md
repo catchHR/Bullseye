@@ -25,7 +25,7 @@ Open-source readiness release: NestJS 12 + BullMQ 6 compatibility, lazy backend 
 ### Added
 
 - `CHANGELOG.md` and Open Source–oriented `README.md` (screenshots placeholders, install guides for Bull and BullMQ).
-- GitHub repository / issues / homepage fields in `package.json` (update the org/repo URL when publishing).
+- GitHub repository / issues / homepage fields in `package.json` pointing at [catchHR/Bullseye](https://github.com/catchHR/Bullseye).
 
 ### Changed
 

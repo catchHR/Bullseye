@@ -65,7 +65,7 @@ See [`docs/screenshots/README.md`](./docs/screenshots/README.md) for the labeled
 npm publish --access public
 ```
 
-Before publishing, check `package.json` `name`, `version`, and repository URLs (GitHub org/repo).
+Before publishing, check `package.json` `name`, `version`, and repository URLs ([catchHR/Bullseye](https://github.com/catchHR/Bullseye)).
 
 ---
 

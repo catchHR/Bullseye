@@ -1,4 +1,4 @@
-# nestjs-bullseye
+# Bullseye
 
 **Open-source embedded queue dashboard for [Bull](https://github.com/OptimalBits/bull) and [BullMQ](https://docs.bullmq.io/) in NestJS (Express).**
 

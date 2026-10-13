@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-
-- Contributor / agent guidance for [Conventional Commits](https://www.conventionalcommits.org/) ([cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)) in `AGENTS.md` and `DEVELOPMENT.md`.
-
 ## [0.2.0] — 2026-10-13
 
 Open-source readiness release: NestJS 12 + BullMQ 6 compatibility, lazy backend loading, and documentation overhaul.
@@ -32,6 +28,7 @@ Open-source readiness release: NestJS 12 + BullMQ 6 compatibility, lazy backend 
 
 - `CHANGELOG.md` and Open Source–oriented `README.md` (screenshots placeholders, install guides for Bull and BullMQ).
 - GitHub repository / issues / homepage fields in `package.json` pointing at [catchHR/Bullseye](https://github.com/catchHR/Bullseye).
+- Contributor / agent guidance for [Conventional Commits](https://www.conventionalcommits.org/) ([cheatsheet](https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13)) in `AGENTS.md` and `DEVELOPMENT.md`.
 
 ### Changed
 

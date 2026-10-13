@@ -75,13 +75,26 @@ Examples: `feat(ui): add command palette`, `fix(drivers): handle missing paused 
 
 ## Publish
 
-```bash
-npm publish --access public
-```
+Distribution is **npm** (`@catchhr/nestjs-bullseye`). GitHub holds source and release notes; hosts still install from the registry.
 
-Before publishing, check `package.json` `name`, `version`, and repository URLs ([catchHR/Bullseye](https://github.com/catchHR/Bullseye)).
+### Checklist
 
-Release version bumps should align with Conventional Commits / SemVer: breaking changes → major, `feat` → minor, otherwise patch — and move `[Unreleased]` entries in `CHANGELOG.md` into a dated version section.
+1. Move `[Unreleased]` entries in `CHANGELOG.md` into a dated version section (`## [x.y.z] — YYYY-MM-DD`).
+2. Set `package.json` `version` to match (SemVer: breaking → major, `feat` → minor, otherwise patch).
+3. Commit on `main` (or merge `develop` → `main`).
+4. Tag and push:
+   ```bash
+   git tag v0.2.0
+   git push origin main --tags
+   ```
+5. Optional GitHub Release from the tag (paste the changelog section as notes).
+6. Log in if needed (`npm login`), then:
+   ```bash
+   npm publish --access public
+   ```
+   `prepublishOnly` runs `npm run build` (frontend → `public/`, lib → `dist/`). `public/assets/` is gitignored; the publish tarball still includes the built assets.
+
+Before publishing, confirm `name`, `version`, and repository URLs ([catchHR/Bullseye](https://github.com/catchHR/Bullseye)).
 
 ---
 
